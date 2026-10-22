@@ -3188,3 +3188,51 @@ fn long_names_are_clipped_instead_of_copied_into_every_diagnostic() {
     assert_eq!(imp.unsupported.len(), 50);
     assert!(imp.unsupported.iter().all(|u| u.action.chars().count() == MAX_NAME_CHARS));
 }
+
+/// A set from Chinese Photoshop: UTF-16 set and action names, a step name in GBK (可选颜色,
+/// the bytes from #6743) on an event PhotoCraft has no command for, with no descriptor.
+fn gbk_set() -> Vec<u8> {
+    let step = AtnItem { dictionary: b"\xbf\xc9\xd1\xa1\xd1\xd5\xc9\xab".to_vec(), ..item("syntheticFill", "", None) };
+    let file = AtnFile {
+        name: UnicodeString::new_nul("相馆"),
+        actions: vec![AtnAction { name: UnicodeString::new_nul("调白"), items: vec![step], ..Default::default() }],
+        ..Default::default()
+    };
+    atn::write(&file).unwrap()
+}
+
+#[test]
+fn load_decodes_legacy_step_names() {
+    let mut s = Session::new();
+    let r = s.execute("actions.load", json!({"data": b64(&gbk_set())})).unwrap();
+    assert_eq!(r["encoding"], "GBK", "{r}");
+    assert_eq!(r["unsupported"][0]["name"], "可选颜色", "{r}");
+    s.execute("file.new", json!({"width": 8, "height": 8})).unwrap();
+    let played = s.execute("actions.play", json!({"action": "调白"})).unwrap();
+    assert!(played["failed"]["error"].as_str().unwrap().contains("可选颜色"), "{played}");
+}
+
+#[test]
+fn load_encoding_override() {
+    let mut s = Session::new();
+    let r = s.execute("actions.load", json!({"data": b64(&gbk_set()), "encoding": "shift_jis"})).unwrap();
+    assert_eq!(r["encoding"], "Shift_JIS", "{r}");
+    let r = s.execute("actions.load", json!({"data": b64(&gbk_set()), "encoding": "auto"})).unwrap();
+    assert_eq!(r["encoding"], "GBK", "{r}");
+}
+
+#[test]
+fn load_reports_utf8() {
+    let mut s = Session::new();
+    let r = s.execute("actions.load", json!({"data": b64(&atn::write(&sample()).unwrap())})).unwrap();
+    assert_eq!(r["encoding"], "UTF-8", "{r}");
+}
+
+#[test]
+fn load_rejects_bad_encodings() {
+    let mut s = Session::new();
+    for bad in [json!(3), json!(""), json!("nope"), json!("replacement"), json!(["gbk"])] {
+        assert!(s.execute("actions.load", json!({"data": b64(&gbk_set()), "encoding": bad})).is_err(), "{bad}");
+    }
+    assert!(s.actions.list.is_empty(), "nothing is loaded when the encoding is bad");
+}
