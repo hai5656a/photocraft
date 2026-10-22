@@ -205,7 +205,7 @@ pub fn export(
     skip_unsupported: bool,
 ) -> std::result::Result<(Vec<u8>, Vec<Skipped>), String> {
     let mut skipped = Vec::new();
-    let mut file = AtnFile { name: UnicodeString::new_nul(set), expanded: true, actions: Vec::new(), warnings: Vec::new() };
+    let mut file = AtnFile { name: UnicodeString::new_nul(set), expanded: true, actions: Vec::new(), warnings: Vec::new(), ..Default::default() };
     for a in actions {
         let mut out = AtnAction { name: UnicodeString::new_nul(&a.name), expanded: false, ..Default::default() };
         if let Some((n, shift, command)) = function_keys.iter().find(|(n, _)| n == &a.name).and_then(|(_, key)| parse_function_key(key)) {
