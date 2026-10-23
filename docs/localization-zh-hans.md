@@ -27,6 +27,9 @@ language manually there.
 
 - `crates/ui-egui/src/i18n/zh-hans.tsv` contains the translations, independent of
   the lookup implementation. Its UTF-8 columns are `context<TAB>source<TAB>translation`.
+  As of 2026-10-22 it covers every key measured by `cargo xtask i18n-coverage` and the
+  same dynamic UI label set as the Italian catalog (~4,306 rows). Engine error and
+  status messages remain English (see [localization-parity.md](localization-parity.md)).
 - `crates/ui-egui/src/i18n/mod.rs` registers `zh-hans` with one plural form and
   `complete_menus: true`. Shared tests enforce coverage of every menu string,
   `tl!` literal, blend mode, brush section and generated preference label.
