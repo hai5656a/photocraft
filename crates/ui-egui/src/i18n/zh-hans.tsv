@@ -4498,3 +4498,75 @@ shape	Appearance	外观
 	Right-to-left paragraph direction	从右到左的段落方向
 	Not rendered: this adjustment ({key}) is kept as imported.	未渲染：此调整（{key}）按导入时的原样保留。
 	Print preview image	Print preview image
+
+# Styles panel: Import / Export Styles (.asl)
+	Import Styles…	导入样式…
+	Export Selected Styles…	导出所选样式…
+	Export Styles…	导出样式…
+	{file} is not a style library (.asl)	{file} 不是样式库 (.asl)
+@plural	Imported {n} style from {file}|Imported {n} styles from {file}	已从 {file} 导入 {n} 个样式
+@plural	Exported {n} style to {file}|Exported {n} styles to {file}	已将 {n} 个样式导出到 {file}
+# Actions: a step dialog holds a suspended recording (#7365)
+	Confirm or cancel the open action step dialog first	请先确认或取消打开的动作步骤对话框
+	Pro Medium Gray	专业中灰
+	Solarized	Solarized
+	Breeze	Breeze
+	Pro Light Gray	专业浅灰
+	Pro Light	专业浅色
+	Resize Windows to Fit	调整窗口大小以适合
+	EXR	EXR
+# Paragraph direction (TYPE-218-2)
+	Automatic paragraph direction	自动段落方向
+	Left-to-right paragraph direction	从左到右的段落方向
+	Right-to-left paragraph direction	从右到左的段落方向
+	Not rendered: this adjustment ({key}) is kept as imported.	未渲染：此调整（{key}）按导入时的原样保留。
+# Print preview image (#8236)
+	Print preview image	打印预览图像
+
+# Color panel menu: modes, copy commands and colour ramps (#6000)
+	Hue Cube	色相立方体
+	Brightness Cube	亮度立方体
+	Color Wheel	色轮
+	Grayscale Slider	灰度滑块
+	RGB Sliders	RGB 滑块
+	HSB Sliders	HSB 滑块
+	CMYK Sliders	CMYK 滑块
+	Lab Sliders	Lab 滑块
+	Web Color Sliders	Web 颜色滑块
+	Copy Color as HTML	将颜色复制为 HTML
+	Copy Color's Hex Code	复制颜色的十六进制代码
+	RGB Spectrum	RGB 色谱
+	CMYK Spectrum	CMYK 色谱
+	Grayscale Ramp	灰度色带
+	Current Colors	当前颜色
+	Make Ramp Web Safe	使色带成为 Web 安全色
+
+# File opening, export status and graphics driver information
+	Couldn't open {name}: {error}	无法打开 {name}：{error}
+	Exported {path} ({size})	已导出 {path}（{size}）
+	Exported {path}	已导出 {path}
+	Exported {n} files	已导出 {n} 个文件
+	Driver: {driver}	驱动程序：{driver}
+# Art History Brush (#213).
+	Art History Brush	艺术历史画笔
+	Art History Brush Tool	艺术历史画笔工具
+	Tight Short	紧密短
+	Tight Medium	紧密中
+	Tight Long	紧密长
+	Loose Medium	宽松中
+	Loose Long	宽松长
+	Dab	点涂
+	Tight Curl	紧密卷曲
+	Loose Curl	宽松卷曲
+	Area	区域
+	Stylized dabs from a history state	从历史状态绘制风格化点涂
+
+# Egui 0.37 migration controls (Aspect Ratio, Category, Color Table, Gamma, Interpolation, Profile, Target, Units, Demosaic)
+	Aspect Ratio	长宽比
+	Category	类别
+	Color Table	颜色表
+	Gamma	伽马
+	Interpolation	插值
+	Profile	配置文件
+	Target	目标
+	Units	单位
