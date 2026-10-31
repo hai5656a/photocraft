@@ -723,6 +723,36 @@ fn start_recording_with_a_set_selected_records_a_new_action_into_it() {
     assert_eq!(list[1].set.as_deref(), Some("Web"));
 }
 
+/// Save Actions… after a click on set B's folder row saves set B, not the first action's set.
+#[test]
+fn save_actions_with_a_set_selected_saves_that_set() {
+    use egui_kittest::{Harness, kittest::Queryable};
+    let (file_dialog, asked) = crate::file_dialog::fake(vec![None]);
+    let services = crate::Services { file_dialog: Some(file_dialog), ..Default::default() };
+    let mut app = PhotocraftApp::new(photocraft_engine::Session::new(), services);
+    app.run("file.new", json!({"width": 8, "height": 8})).unwrap();
+    for (name, set) in [("Sharpen", "Retouch"), ("Resize", "Web")] {
+        let mut action = Action::new(name, vec![("layer.new.layer".into(), json!({}))]);
+        action.set = Some(set.into());
+        app.session.actions.list.push(action);
+    }
+    let mut h = Harness::builder().with_size(vec2(360.0, 600.0)).build_ui_state(
+        |ui, app| {
+            panel_menu(app, ui);
+            panel(app, ui);
+        },
+        app,
+    );
+    h.run_steps(2);
+    h.get_by_label("Web").click();
+    h.run_steps(2);
+    assert_eq!((h.state().ui.actions.selected, h.state().ui.actions.selected_set.as_deref()), (None, Some("Web")));
+    h.get_by_label("Save Actions…").click();
+    h.run_steps(2);
+    h.state_mut().poll_file_dialog(&egui::Context::default(), None);
+    assert!(matches!(asked.borrow().as_slice(), [crate::file_dialog::FileDialogRequest::Save { suggested }] if suggested == "Web.atn"), "{:?}", asked.borrow());
+}
+
 #[test]
 fn moving_an_action_next_to_another_set_joins_it() {
     let mut app = PhotocraftApp::new(photocraft_engine::Session::new(), crate::Services::default());

@@ -428,10 +428,12 @@ fn load_dialog(app: &mut PhotocraftApp) -> Result<Value, String> {
     app.pick_file_bytes_filtered(&["atn"], |app, name, bytes| load_bytes(app, &name, &bytes))
 }
 
-/// Save Actions…: the selected action's set (every action of it), or every action when none
-/// came from a set, as a `.atn` file Photoshop loads.
+/// Save Actions…: the selected action's set (every action of it), else the selected set folder,
+/// or every action when none came from a set, as a `.atn` file Photoshop loads.
 fn save_dialog(app: &mut PhotocraftApp, set: Option<String>) -> Result<Value, String> {
-    let set = set.or_else(|| selected_action(app).and_then(|a| a.set.clone()));
+    let selected_set = app.ui.actions.selected.is_none().then(|| app.ui.actions.selected_set.clone()).flatten();
+    let selected_set = selected_set.filter(|set| photocraft_engine::actions_edit_cmds::set_names(&app.session).contains(set));
+    let set = set.or(selected_set).or_else(|| selected_action(app).and_then(|a| a.set.clone()));
     let params = match &set {
         Some(set) => json!({"set": set, "skipUnsupported": true}),
         None => json!({"skipUnsupported": true}),
