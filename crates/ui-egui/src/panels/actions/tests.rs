@@ -693,6 +693,36 @@ fn new_set_makes_an_empty_folder_that_new_action_records_into() {
     assert_eq!(h.state().session.actions.list[2].set.as_deref(), Some("Retouch"));
 }
 
+/// #7535: with a set's folder row selected and no action, Start Recording (like the Record button)
+/// has no action to append to, so it records a new action into that set, as New Action does.
+#[test]
+fn start_recording_with_a_set_selected_records_a_new_action_into_it() {
+    use egui_kittest::{Harness, kittest::Queryable};
+    let mut app = PhotocraftApp::new(photocraft_engine::Session::new(), crate::Services::default());
+    app.run("file.new", json!({"width": 8, "height": 8})).unwrap();
+    let mut retouch = Action::new("Sharpen", vec![]);
+    retouch.set = Some("Retouch".into());
+    app.session.actions.list.push(retouch);
+    app.run("actions.newSet", json!({"name": "Web"})).unwrap();
+    let mut h = Harness::builder().with_size(vec2(360.0, 600.0)).build_ui_state(
+        |ui, app| {
+            panel_menu(app, ui);
+            panel(app, ui);
+        },
+        app,
+    );
+    h.run_steps(2);
+    h.get_by_label("Web").click();
+    h.run_steps(2);
+    assert_eq!((h.state().ui.actions.selected, h.state().ui.actions.selected_set.as_deref()), (None, Some("Web")));
+    h.get_by_label("Start Recording").click();
+    h.run_steps(2);
+    h.state_mut().run("actions.stop", json!({})).unwrap();
+    let list = &h.state().session.actions.list;
+    assert_eq!(list.len(), 2);
+    assert_eq!(list[1].set.as_deref(), Some("Web"));
+}
+
 #[test]
 fn moving_an_action_next_to_another_set_joins_it() {
     let mut app = PhotocraftApp::new(photocraft_engine::Session::new(), crate::Services::default());

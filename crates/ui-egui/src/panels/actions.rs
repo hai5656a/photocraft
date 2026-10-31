@@ -269,10 +269,11 @@ fn begin_recording(app: &mut PhotocraftApp, append: bool) {
     if app.session.actions.recording.is_some() {
         return;
     }
-    let params = if append {
-        app.ui.actions.selected.map_or(json!({}), |i| json!({"action": i}))
-    } else {
-        new_action_set(app).map_or(json!({}), |set| json!({"set": set}))
+    // Recording appends to the selected action; with none (a set folder selected, say) it makes a
+    // new action like New Action does, in the selected set.
+    let params = match app.ui.actions.selected {
+        Some(i) if append => json!({"action": i}),
+        _ => new_action_set(app).map_or(json!({}), |set| json!({"set": set})),
     };
     let Ok(v) = app.run("actions.record", params) else { return };
     let Some(i) = v.get("index").and_then(Value::as_u64).and_then(|n| usize::try_from(n).ok()) else { return };
