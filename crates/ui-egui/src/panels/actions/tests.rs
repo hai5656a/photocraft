@@ -723,6 +723,38 @@ fn start_recording_with_a_set_selected_records_a_new_action_into_it() {
     assert_eq!(list[1].set.as_deref(), Some("Web"));
 }
 
+/// A click on an expanded set's folder row selects it and collapses it; recording into it (New
+/// Action or Start Recording) expands the set again, so the new action and its steps show.
+#[test]
+fn recording_into_a_collapsed_set_expands_it() {
+    use egui_kittest::{Harness, kittest::Queryable};
+    for label in ["Create new action", "Start Recording"] {
+        let mut app = PhotocraftApp::new(photocraft_engine::Session::new(), crate::Services::default());
+        app.run("file.new", json!({"width": 8, "height": 8})).unwrap();
+        let mut retouch = Action::new("Sharpen", vec![]);
+        retouch.set = Some("Retouch".into());
+        app.session.actions.list.push(retouch);
+        let mut h = Harness::builder().with_size(vec2(360.0, 600.0)).build_ui_state(
+            |ui, app| {
+                panel_menu(app, ui);
+                panel(app, ui);
+            },
+            app,
+        );
+        h.run_steps(2);
+        h.get_by_label("Retouch").click();
+        h.run_steps(2);
+        assert_eq!(h.state().ui.actions.collapsed_sets, ["Retouch"], "{label}");
+        assert!(h.query_by_label("Sharpen").is_none(), "{label}");
+        h.get_by_label(label).click();
+        h.run_steps(2);
+        assert!(h.state().ui.actions.collapsed_sets.is_empty(), "{label}");
+        assert_eq!(h.state().ui.actions.selected, Some(1), "{label}");
+        assert!(h.query_by_label("Action 2").is_some(), "{label}");
+        h.state_mut().run("actions.stop", json!({})).unwrap();
+    }
+}
+
 /// Save Actions… after a click on set B's folder row saves set B, not the first action's set.
 #[test]
 fn save_actions_with_a_set_selected_saves_that_set() {

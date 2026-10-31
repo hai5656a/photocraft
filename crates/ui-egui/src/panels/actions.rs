@@ -283,6 +283,10 @@ fn begin_recording(app: &mut PhotocraftApp, append: bool) {
         app.ui.actions.expanded.resize(i + 1, false);
     }
     app.ui.actions.expanded[i] = true;
+    // Its set too: a click that selected the set's folder row may have collapsed it.
+    if let Some(set) = app.session.actions.list.get(i).and_then(|a| a.set.as_ref()) {
+        app.ui.actions.collapsed_sets.retain(|c| c != set);
+    }
 }
 
 pub(crate) fn report_play(app: &mut PhotocraftApp, v: &Value) {
