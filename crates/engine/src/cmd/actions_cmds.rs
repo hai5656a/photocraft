@@ -372,6 +372,9 @@ fn record(s: &mut Session, p: &Value) -> Result<Value> {
         }
         let set = match p.get("set") {
             None | Some(Value::Null) => None,
+            // An existing set keeps its exact name (an older actions.json may pad it); a new one
+            // is trimmed.
+            Some(Value::String(n)) if s.actions.list.iter().any(|a| a.set.as_deref() == Some(n.as_str())) => Some(n.clone()),
             Some(Value::String(n)) if !n.trim().is_empty() => Some(n.trim().to_string()),
             Some(_) => return Err(bad("actions.record", "\"set\" must be a set name or null")),
         };
