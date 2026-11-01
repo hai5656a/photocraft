@@ -644,20 +644,42 @@ mod tests {
 
     #[test]
     fn latin1_symbol_names_read_as_windows_1252() {
-        // Windows Photoshop "Logo ®" and "Größe »" with no Unicode copy: Mac Roman reads these
-        // bytes as letters ("Logo Æ", "Grˆﬂe ª"), but they are windows-1252, as before #6743.
-        let f = parse(&one_action("Set 1", "Action 1", vec![bare(AtnEvent::name("x"), b"Logo \xae")])).unwrap();
-        assert_eq!(f.encoding.as_deref(), Some("windows-1252"));
-        assert_eq!(labels(&f), ["Logo ®"]);
+        // Windows Photoshop "Größe »" and "50 °" with no Unicode copy: Mac Roman reads these
+        // bytes as letters and symbols ("Grˆﬂe ª", "50 ∞"), but they are windows-1252, as before
+        // #6743.
         let f = parse(&one_action("Größe ändern", "Aktion", vec![bare(AtnEvent::name("x"), b"Gr\xf6\xdfe \xbb")])).unwrap();
         assert_eq!(f.encoding.as_deref(), Some("windows-1252"));
         assert_eq!(labels(&f), ["Größe »"]);
         assert!(f.warnings.is_empty(), "{:?}", f.warnings);
+        let f = parse(&one_action("Größe ändern", "Aktion", vec![bare(AtnEvent::name("x"), b"50 \xb0")])).unwrap();
+        assert_eq!(labels(&f), ["50 °"]);
+        // Known limitation: "Logo ®" alone reads as Mac Roman "Logo Æ", as Mac "Æble" needs that
+        // byte (codepage's symbols_on_mac_roman_letters_stay_ambiguous).
+        let f = parse(&one_action("Set 1", "Action 1", vec![bare(AtnEvent::name("x"), b"Logo \xae")])).unwrap();
+        assert_eq!(f.encoding.as_deref(), Some("macintosh"));
+        assert_eq!(labels(&f), ["Logo Æ"]);
         // Mac Roman bytes that windows-1252 reads as controls or rare letters stay Mac Roman.
         let f =
             parse(&one_action("Définir", "Action 1", vec![bare(AtnEvent::name("x"), b"Gr\x9a\xa7e"), bare(AtnEvent::name("y"), b"Arri\x8fre-plan")])).unwrap();
         assert_eq!(f.encoding.as_deref(), Some("macintosh"));
         assert_eq!(labels(&f), ["Größe", "Arrière-plan"]);
+    }
+
+    #[test]
+    fn mac_roman_sharp_s_and_slashed_o_stay_mac_roman() {
+        // Mac Roman ß ø æ Æ are the bytes of windows-1252 § ¿ ¾ ®: German and Danish Mac names
+        // with no Unicode copy still read as Mac Roman, each alone and as a set.
+        let words: [&[u8]; 5] = [b"Wei\xa7", b"Gau\xa7scher Weichzeichner", b"St\xbfrrelse", b"L\xberredst\xbfrrelse", b"\xaeble"];
+        let text = ["Weiß", "Gaußscher Weichzeichner", "Størrelse", "Lærredstørrelse", "Æble"];
+        for (bytes, text) in words.iter().zip(text) {
+            let f = parse(&one_action("Größe ändern", "Aktion 1", vec![bare(AtnEvent::name("x"), bytes)])).unwrap();
+            assert_eq!((f.encoding.as_deref(), labels(&f)), (Some("macintosh"), vec![text.to_string()]));
+            assert!(f.warnings.is_empty(), "{:?}", f.warnings);
+        }
+        let items = words.iter().map(|w| bare(AtnEvent::name("x"), w)).collect();
+        let f = parse(&one_action("Größe ändern", "Aktion 1", items)).unwrap();
+        assert_eq!(f.encoding.as_deref(), Some("macintosh"));
+        assert_eq!(labels(&f), text);
     }
 
     #[test]

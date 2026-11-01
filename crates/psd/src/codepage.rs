@@ -16,9 +16,9 @@
 //!    fine): kana → Shift_JIS; Hangul → EUC-KR; Cyrillic → windows-1251; Han → GBK, then
 //!    Big5, then Shift_JIS; Latin letters → windows-1252, then Mac Roman.
 //! 4. Still tied: windows-1252, flagged [`Guess::uncertain`].
-//! 5. Mac Roman must also beat windows-1252 when Latin-1's symbols (© ® ° § « » ± ½…) count
-//!    as common text, as Mac Roman's letters sit on those bytes (1252 "Logo ®" is Mac Roman
-//!    "Logo Æ"). Otherwise the names are windows-1252, with step 3's hint and step 4's warning.
+//! 5. Mac Roman must also beat windows-1252 when the Latin-1 symbols that are no letter in
+//!    Mac Roman (© ° « ± …) count as common text (1252 "Größe »" is Mac Roman "Grˆﬂe ª").
+//!    Otherwise the names are windows-1252, with step 3's hint and step 4's warning.
 //!
 //! Only the first [`GUESS_SAMPLE`] bytes of names are examined.
 
@@ -241,9 +241,12 @@ fn is_latin_common(ch: char) -> bool {
     (ch.is_alphabetic() && !['Š', 'š', 'Ž', 'ž', 'Œ', 'œ', 'Ÿ', 'ƒ', 'ˆ'].contains(&ch)) || TYPOGRAPHIC.contains(&ch) || LATIN_SYMBOLS.contains(&ch)
 }
 
-/// Latin-1 symbols people type in names (windows-1252 0xA1–0xF7). Not € or ™: windows-1252 has
-/// them at 0x80 and 0x99, Mac Roman's Ä and ô.
-const LATIN_SYMBOLS: [char; 20] = ['¡', '¢', '£', '¥', '§', '©', '«', '®', '°', '±', '²', '³', '¶', '·', '¹', '»', '¼', '½', '¾', '¿'];
+/// Latin-1 symbols people type in names (windows-1252 0xA1–0xB7) whose byte is not a letter in
+/// Mac Roman. Left out because Mac Roman has a letter there: § ® ¹ » ¼ ½ ¾ ¿ (ß Æ π ª º Ω æ ø,
+/// as in Mac "Weiß", "Størrelse", "Æble"), € and ™ (0x80, 0x99: Ä, ô). So a windows-1252 name
+/// whose only non-ASCII character is one of those ("Logo ®") still reads as Mac Roman ("Logo
+/// Æ").
+const LATIN_SYMBOLS: [char; 12] = ['¡', '¢', '£', '¥', '©', '«', '°', '±', '²', '³', '¶', '·'];
 
 /// Quotes, dashes, ellipsis and bullet: windows-1252 and windows-1251 share them at 0x82–0x97;
 /// Mac Roman has them too.
@@ -398,13 +401,9 @@ mod tests {
 
     #[test]
     fn latin1_symbols_read_as_1252_not_mac_roman() {
-        // Mac Roman has letters where windows-1252 has © ® « » §: 1252 "Logo ®" is Mac Roman
-        // "Logo Æ", "Größe »" is "Grˆﬂe ª". Latin-1 (what a code-page-blind reader shows) wins.
-        let logo: &[&[u8]] = &[b"Logo \xae"];
-        assert_eq!(guess(logo, "Set 1"), Guess { encoding: WINDOWS_1252, uncertain: true });
-        assert_eq!(guess(logo, "Größe ändern"), Guess { encoding: WINDOWS_1252, uncertain: false });
-        assert_eq!(decode(logo[0], WINDOWS_1252), "Logo ®");
-        for words in [&["Größe »"][..], &["Contraste « auto »", "§ 3 Größe", "½ Größe", "Teinte ¾ ©"]] {
+        // Mac Roman has letters where windows-1252 has some symbols: 1252 "Größe »" is Mac Roman
+        // "Grˆﬂe ª", "50 °" is "50 ∞". Latin-1 (what a code-page-blind reader shows) wins.
+        for words in [&["Größe »"][..], &["50 °"], &["Contraste « auto »", "© Größe", "± 5"]] {
             let g = guess_words(WINDOWS_1252, words, "Größe ändern");
             assert_eq!(g, Guess { encoding: WINDOWS_1252, uncertain: false }, "{words:?}");
             assert_eq!(guess_words(WINDOWS_1252, words, "Set 1").encoding, WINDOWS_1252, "{words:?}");
@@ -412,10 +411,34 @@ mod tests {
     }
 
     #[test]
+    fn symbols_on_mac_roman_letters_stay_ambiguous() {
+        // Known limitation: 1252 "Logo ®" is Mac Roman "Logo Æ", and ® is not counted for
+        // windows-1252 because Mac "Æble" and "Weiß" use those bytes, so the name reads as Mac
+        // Roman whatever the hint, as it did before the symbols counted at all.
+        let logo: &[&[u8]] = &[b"Logo \xae"];
+        assert_eq!(guess(logo, "Größe ändern"), Guess { encoding: MACINTOSH, uncertain: false });
+        assert_eq!(guess(logo, "Set 1"), Guess { encoding: MACINTOSH, uncertain: false });
+    }
+
+    #[test]
     fn mac_roman_letters_still_read_as_mac_roman() {
         // Mac Roman "Größe" is 1252 "Grš§e", "Ändern" "€ndern", "Contrôle" "Contr™le": Mac Roman
         // still wins once § counts as common text in windows-1252.
-        for word in ["Größe", "Ändern", "Contrôle"] {
+        // Mac Roman ß ø æ Æ are 1252 § ¿ ¾ ®, which windows-1252 must not count as common.
+        let words = [
+            "Größe",
+            "Ändern",
+            "Contrôle",
+            "Weiß",
+            "Schwarzweiß",
+            "Gaußscher Weichzeichner",
+            "Schließen",
+            "Størrelse",
+            "Lærredstørrelse",
+            "Fjern støy",
+            "Æble",
+        ];
+        for word in words {
             let g = guess_words(MACINTOSH, &[word], "Définir l’arrière-plan");
             assert_eq!(g, Guess { encoding: MACINTOSH, uncertain: false }, "{word}");
         }
