@@ -55,11 +55,56 @@ pub(crate) fn label_of(id: &str) -> String {
         .unwrap_or_else(|| id.to_string())
 }
 
-/// The selected action, or the first one when nothing is selected.
+/// The selected action, else the first action of the selected set (Batch and Create Droplet start
+/// on the panel's selection), else the first one.
 pub fn selected_action(app: &PhotocraftApp) -> Option<&Action> {
     let list = &app.session.actions.list;
     let idx = app.ui.actions.selected.filter(|i| *i < list.len());
-    idx.and_then(|i| list.get(i)).or_else(|| list.first())
+    idx.and_then(|i| list.get(i)).or_else(|| selected_set_actions(app).first().and_then(|i| list.get(*i))).or_else(|| list.first())
+}
+
+/// The selected set folder, if no action is selected and the set still exists.
+fn selected_set(app: &PhotocraftApp) -> Option<&str> {
+    if app.ui.actions.selected.is_some_and(|i| i < app.session.actions.list.len()) {
+        return None;
+    }
+    let set = app.ui.actions.selected_set.as_deref()?;
+    photocraft_engine::actions_edit_cmds::set_names(&app.session).iter().any(|n| n == set).then_some(set)
+}
+
+/// The actions of the selected set, in list order (empty when no set is selected, or it is empty).
+fn selected_set_actions(app: &PhotocraftApp) -> Vec<usize> {
+    let Some(set) = selected_set(app) else { return Vec::new() };
+    app.session.actions.list.iter().enumerate().filter(|(_, a)| a.set.as_deref() == Some(set)).map(|(i, _)| i).collect()
+}
+
+/// What Play plays: the selected action; with a set folder selected, every action of that set in
+/// order, as Photoshop plays a selected set (nothing for an empty set); else the first action.
+fn playback_targets(app: &PhotocraftApp) -> Vec<usize> {
+    if selected_set(app).is_some() {
+        return selected_set_actions(app);
+    }
+    playback_selection(app).into_iter().collect()
+}
+
+/// Play `targets` one after another, stopping at the first that fails, pauses for a dialog or
+/// can't start. Returns the last result with `ran` counting the steps of all of them, or `None`
+/// when there was nothing to play.
+fn play_targets(app: &mut PhotocraftApp, targets: &[usize]) -> Result<Option<Value>, String> {
+    let (mut last, mut ran) = (None, 0u64);
+    for &i in targets {
+        let mut v = app.run("actions.play", json!({"action": i}))?;
+        ran = ran.saturating_add(v.get("ran").and_then(Value::as_u64).unwrap_or(0));
+        let stop = v.get("failed").is_some_and(Value::is_object) || v.get("paused").is_some_and(Value::is_object);
+        if let Some(o) = v.as_object_mut() {
+            o.insert("ran".into(), json!(ran));
+        }
+        last = Some(v);
+        if stop {
+            break;
+        }
+    }
+    Ok(last)
 }
 
 /// Index of the playback target. Photoshop's Play button uses the first action when
@@ -746,11 +791,15 @@ pub fn panel_menu(app: &mut PhotocraftApp, ui: &mut egui::Ui) {
             Ok(Value::Null)
         }
         "stopRec" => app.run("actions.stop", json!({})),
-        "play" => playback_selection(app).map_or(Ok(Value::Null), |i| {
-            let v = app.run("actions.play", json!({"action": i}))?;
-            report_play(app, &v);
-            Ok(v)
-        }),
+        "play" => {
+            let targets = playback_targets(app);
+            play_targets(app, &targets).map(|v| {
+                if let Some(v) = &v {
+                    report_play(app, v);
+                }
+                v.unwrap_or(Value::Null)
+            })
+        }
         "delete" => {
             delete_selection(app);
             Ok(Value::Null)
@@ -1043,7 +1092,7 @@ pub fn panel(app: &mut PhotocraftApp, ui: &mut egui::Ui) {
     let mut set_toggled: Option<String> = None;
     let mut save_set: Option<String> = None;
     let max_h = (ui.available_height() - 38.0).max(0.0);
-    let mut play_idx = None;
+    let mut play_idx: Option<Vec<usize>> = None;
     let mut moved = None;
     let recording_row = recording.and_then(|(_, i)| rows.get(i).map(|r| (i, r.steps.len())));
     let reveal = recording_row.filter(|row| app.ui.actions.reveal_recording != Some(*row));
@@ -1144,9 +1193,12 @@ pub fn panel(app: &mut PhotocraftApp, ui: &mut egui::Ui) {
             if resp.clicked() {
                 app.ui.actions.selected = Some(i);
                 app.ui.actions.selected_step = None;
+                // The action replaces the set as the selection, so a later deselect (Delete)
+                // doesn't bring back a set the user moved away from.
+                app.ui.actions.selected_set = None;
                 if button_mode {
                     if !resp.double_clicked() {
-                        play_idx = Some(i);
+                        play_idx = Some(vec![i]);
                     }
                 } else if resp.interact_pointer_pos().is_some_and(|p| p.x < x0 + 20.0) {
                     if app.ui.actions.expanded.len() <= i {
@@ -1163,7 +1215,7 @@ pub fn panel(app: &mut PhotocraftApp, ui: &mut egui::Ui) {
                 if resp.interact_pointer_pos().is_some_and(|p| name_rect.expand2(vec2(4.0, 13.0)).contains(p)) {
                     app.ui.actions.renaming = Some(RenameAction { index: i, text: name.clone(), focused: false });
                 } else {
-                    play_idx = Some(i);
+                    play_idx = Some(vec![i]);
                 }
             }
             if expanded {
@@ -1227,7 +1279,7 @@ pub fn panel(app: &mut PhotocraftApp, ui: &mut egui::Ui) {
         let play = crate::icons::button(ui, "play", 24.0, false, tl!("Play selection"));
         play.widget_info(|| egui::WidgetInfo::labeled(egui::Role::Button, true, tl!("Play selection")));
         if play.clicked() {
-            play_idx = playback_selection(app);
+            play_idx = Some(playback_targets(app));
         }
         if crate::icons::button(ui, "folder", 24.0, false, tl!("Create new set")).clicked()
             && let Err(e) = new_set_dialog(app)
@@ -1253,9 +1305,10 @@ pub fn panel(app: &mut PhotocraftApp, ui: &mut egui::Ui) {
             app.ui.actions.button_mode = !app.ui.actions.button_mode;
         }
     });
-    if let Some(i) = play_idx {
-        match app.run("actions.play", json!({"action": i})) {
-            Ok(v) => report_play(app, &v),
+    if let Some(targets) = play_idx {
+        match play_targets(app, &targets) {
+            Ok(Some(v)) => report_play(app, &v),
+            Ok(None) => {}
             Err(e) => {
                 let template = "Action playback failed: {error}";
                 app.ui.status = crate::i18n::fmt(tl!(template), &[("error", &e)]);

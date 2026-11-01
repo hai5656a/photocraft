@@ -655,6 +655,85 @@ fn set_folders_group_actions_and_collapse() {
     assert!(h.query_by_label("Sharpen").is_some());
 }
 
+/// Two sets, Web listed first: "Resize" (Web) adds a layer "w", "Sharpen" and "Soften" (Retouch)
+/// add "r1" and "r2".
+fn two_set_panel() -> egui_kittest::Harness<'static, PhotocraftApp> {
+    let mut app = PhotocraftApp::new(photocraft_engine::Session::new(), crate::Services::default());
+    app.run("file.new", json!({"width": 8, "height": 8})).unwrap();
+    for (name, set, layer) in [("Resize", "Web", "w"), ("Sharpen", "Retouch", "r1"), ("Soften", "Retouch", "r2")] {
+        let mut a = Action::new(name, vec![("layer.new.layer".into(), json!({"name": layer}))]);
+        a.set = Some(set.into());
+        app.session.actions.list.push(a);
+    }
+    let mut h = egui_kittest::Harness::builder().with_size(vec2(360.0, 400.0)).build_ui_state(|ui, app| panel(app, ui), app);
+    h.run_steps(2);
+    h
+}
+
+fn layer_names(app: &PhotocraftApp) -> Vec<String> {
+    app.session.active().unwrap().doc.walk().iter().map(|(_, _, l)| l.name.clone()).filter(|n| n != "Background").collect()
+}
+
+/// #10459 fix-up: a click on a set folder (also how a set collapses) selects the set, and Play
+/// then plays every action of that set in order, as Photoshop plays a selected set, not the first
+/// action of the whole list.
+#[test]
+fn play_with_a_set_folder_selected_plays_that_sets_actions() {
+    use egui_kittest::kittest::Queryable;
+    let mut h = two_set_panel();
+    h.get_by_label("Resize").click();
+    h.run_steps(2);
+    // Collapse and expand Retouch: the set stays selected.
+    h.get_by_label("Retouch").click();
+    h.run_steps(2);
+    h.get_by_label("Retouch").click();
+    h.run_steps(2);
+    h.get_by_label("Play selection").click();
+    h.run_steps(2);
+    let mut names = layer_names(h.state());
+    names.sort();
+    assert_eq!(names, ["r1", "r2"], "the Retouch set played, not Resize");
+    assert!(!h.state().ui.status_error, "{}", h.state().ui.status);
+    // Batch and Create Droplet start on the selected set too.
+    assert_eq!(selected_action(h.state()).map(|a| a.name.as_str()), Some("Sharpen"));
+}
+
+/// #10459 fix-up: Play with an empty set selected plays nothing.
+#[test]
+fn play_with_an_empty_set_selected_plays_nothing() {
+    use egui_kittest::kittest::Queryable;
+    let mut h = two_set_panel();
+    h.state_mut().run("actions.newSet", json!({"name": "Print"})).unwrap();
+    h.run_steps(2);
+    h.get_by_label("Print").click();
+    h.run_steps(2);
+    assert_eq!(h.state().ui.actions.selected_set.as_deref(), Some("Print"));
+    h.get_by_label("Play selection").click();
+    h.run_steps(2);
+    assert!(layer_names(h.state()).is_empty(), "{:?}", layer_names(h.state()));
+}
+
+/// #10459 fix-up: the common case is unchanged: a selected action plays alone, also after a set
+/// folder was selected before it, and a later Delete doesn't bring that set back.
+#[test]
+fn play_with_an_action_selected_plays_only_that_action() {
+    use egui_kittest::kittest::Queryable;
+    let mut h = two_set_panel();
+    h.get_by_label("Retouch").click();
+    h.run_steps(2);
+    h.get_by_label("Retouch").click();
+    h.run_steps(2);
+    h.get_by_label("Sharpen").click();
+    h.run_steps(2);
+    h.get_by_label("Play selection").click();
+    h.run_steps(2);
+    assert_eq!(layer_names(h.state()), ["r1"]);
+    assert_eq!(selected_action(h.state()).map(|a| a.name.as_str()), Some("Sharpen"));
+    h.get_by_label("Delete").click();
+    h.run_steps(2);
+    assert_eq!((h.state().ui.actions.selected, h.state().ui.actions.selected_set.as_deref()), (None, None));
+}
+
 /// #7535: the folder button (and the panel menu's New Set…) names an empty set, shown as a folder
 /// row with no actions; New Action then records into it, as into any selected set.
 #[test]
