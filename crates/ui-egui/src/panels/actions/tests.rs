@@ -951,6 +951,26 @@ fn save_set_on_an_empty_set_folder_opens_the_save_dialog() {
     );
 }
 
+/// CodeRabbit review on #10459: a set named after a Windows device (`CON`, `com1.v2`) or holding a
+/// control character gets a suggested file name Windows can create.
+#[test]
+fn save_actions_suggests_a_windows_safe_name_for_device_and_control_character_sets() {
+    use egui_kittest::kittest::Queryable;
+    for (set, suggested) in [("CON", "CON_.atn"), ("com1.v2", "com1_.v2.atn"), ("Web\u{1}Print\tMail", "Web_Print_Mail.atn"), ("Print", "Print.atn")] {
+        let (mut h, asked) = empty_set_save_harness(set);
+        h.get_by_label(set).click();
+        h.run_steps(2);
+        h.get_by_label("Save Actions…").click();
+        h.run_steps(2);
+        h.state_mut().poll_file_dialog(&egui::Context::default(), None);
+        assert!(
+            matches!(asked.borrow().as_slice(), [crate::file_dialog::FileDialogRequest::Save { suggested: s }] if s == suggested),
+            "{set:?}: {:?}",
+            asked.borrow()
+        );
+    }
+}
+
 #[test]
 fn moving_an_action_next_to_another_set_joins_it() {
     let mut app = PhotocraftApp::new(photocraft_engine::Session::new(), crate::Services::default());

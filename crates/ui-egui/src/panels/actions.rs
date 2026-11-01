@@ -446,15 +446,15 @@ fn save_dialog(app: &mut PhotocraftApp, set: Option<String>) -> Result<Value, St
     let bytes = r["data"].as_str().and_then(photocraft_engine::paint::tile::b64_decode).ok_or("the export returned no data")?;
     let n = r["actions"].as_array().map_or(0, Vec::len) as u64;
     let skipped = r["skipped"].as_array().map_or(0, Vec::len);
-    // A set name can hold characters a file name can't (as in Keyboard Shortcuts' Save); the
-    // file keeps the set's own name.
+    // A set name can hold characters a file name can't (as in Keyboard Shortcuts' Save), or be a
+    // Windows device name (`CON`); the file keeps the set's own name.
     let stem: String = r["set"]
         .as_str()
         .unwrap_or("Actions")
         .chars()
-        .map(|c| if matches!(c, '/' | '\\' | ':' | '*' | '?' | '"' | '<' | '>' | '|') { '_' } else { c })
+        .map(|c| if c.is_control() || matches!(c, '/' | '\\' | ':' | '*' | '?' | '"' | '<' | '>' | '|') { '_' } else { c })
         .collect();
-    let file = format!("{stem}.atn");
+    let file = format!("{}.atn", photocraft_engine::file_cmds::portable_device_name(stem));
     app.pick_save(&file, move |app, path| {
         let write = app.services.write.as_mut().ok_or("no writer configured")?;
         write(&path, &bytes)?;
