@@ -880,6 +880,37 @@ fn a_set_paused_at_a_dialog_plays_its_own_actions_after_a_move() {
     assert_eq!(names, ["a", "b", "c"]);
 }
 
+/// CodeRabbit on batch 11: an action of the paused set deleted and made again under its name while
+/// the dialog is open is a different action, so the set ends there instead of playing it.
+#[test]
+fn a_set_paused_at_a_dialog_ends_at_an_action_replaced_under_its_name() {
+    use egui_kittest::kittest::Queryable;
+    let mut app = PhotocraftApp::new(photocraft_engine::Session::new(), crate::Services::default());
+    app.run("file.new", json!({"width": 8, "height": 8})).unwrap();
+    for (name, layer) in [("A", "a"), ("B", "b"), ("C", "c")] {
+        let mut a = Action::new(name, vec![("layer.new.layer".into(), json!({"name": layer}))]);
+        a.set = Some("S".into());
+        app.session.actions.list.push(a);
+    }
+    app.session.actions.list[0].steps.push(("filter.blur.gaussianBlur".into(), json!({"radius": 1})));
+    app.session.actions.list[0].dialogs.insert(1);
+    let mut h = egui_kittest::Harness::builder().with_size(vec2(360.0, 400.0)).build_ui_state(|ui, app| panel(app, ui), app);
+    h.run_steps(2);
+    h.get_by_label("S").click();
+    h.run_steps(2);
+    h.get_by_label("Play selection").click();
+    h.run_steps(2);
+    assert_eq!(layer_names(h.state()), ["a"]);
+    let dialog = h.state().ui.dialogs.last().map(|d| d.id).expect("the blur's dialog");
+    h.state_mut().run("actions.delete", json!({"action": "B"})).unwrap();
+    let mut b = Action::new("B", vec![("layer.new.layer".into(), json!({"name": "new b"}))]);
+    b.set = Some("S".into());
+    h.state_mut().session.actions.list.insert(1, b);
+    crate::dialogs::confirm(h.state_mut(), dialog).unwrap();
+    h.run_steps(2);
+    assert_eq!(layer_names(h.state()), ["a"], "neither the new B nor C after it played");
+}
+
 /// #10459 fix-up: a set whose action pauses at a dialog inside an action it calls stops there:
 /// the called action resumes alone, so the next action of the set must not run on a caller that
 /// never finished.

@@ -115,9 +115,10 @@ fn play_targets(app: &mut PhotocraftApp, targets: &[usize], before: u64) -> Resu
         }
         last = Some(v);
         if let Some(dialog) = paused.filter(|_| !failed) {
-            // By name: the list can be reordered while the dialog is open (`actions.move`).
+            // As they are now, not by index: the list can be reordered while the dialog is open
+            // (`actions.move`), and one deleted and made again under its name isn't the same action.
             let list = &app.session.actions.list;
-            let rest: Vec<String> = targets.get(n + 1..).unwrap_or_default().iter().filter_map(|i| list.get(*i).map(|a| a.name.clone())).collect();
+            let rest: Vec<Action> = targets.get(n + 1..).unwrap_or_default().iter().filter_map(|i| list.get(*i).cloned()).collect();
             let token = app.ui.dialog_mut(dialog).and_then(|d| d.fields.get(RESUME)).and_then(Value::as_u64);
             if let Some(entry) = token.and_then(|t| app.paused_playbacks.paused.get_mut(&t))
                 && name.as_ref() == Some(&entry.action)
@@ -700,8 +701,10 @@ pub(crate) struct PausedPlayback {
     /// box, automation), which end the call through `resume`, `abandoned` or `stopped`, so the
     /// recording comes back exactly once.
     record: Option<Value>,
-    /// The actions still to play after this one, by name, when Play started a whole set.
-    then: Vec<String>,
+    /// The actions still to play after this one, as they were when Play started a whole set.
+    /// Actions have no id, so the whole action stands in for one: an action deleted and made again
+    /// under the same name, or edited, while the dialog is open no longer matches.
+    then: Vec<Action>,
     /// The steps that Play ran before this pause (earlier actions of the set, and this one's
     /// steps before the dialog), so the final count covers the whole Play.
     ran: u64,
@@ -771,14 +774,15 @@ pub fn resume(app: &mut PhotocraftApp, fields: &serde_json::Map<String, Value>) 
         o.insert("ran".into(), json!(ran));
     }
     // The rest of a set Play started: under the same gate, and only if this action finished. An
-    // action of it deleted or renamed meanwhile ends the set there.
+    // action of it deleted, renamed, edited or replaced by a new one of the same name meanwhile
+    // ends the set there.
     if let Ok(v) = &played
         && !paused.then.is_empty()
         && v.get("failed").is_none()
         && v.get("paused").is_none()
     {
         let list = &app.session.actions.list;
-        let rest: Vec<usize> = paused.then.iter().map_while(|name| list.iter().position(|a| &a.name == name)).collect();
+        let rest: Vec<usize> = paused.then.iter().map_while(|then| list.iter().position(|a| a == then)).collect();
         match play_targets(app, &rest, ran) {
             Ok(Some(r)) => played = Ok(r),
             Ok(None) => {}
