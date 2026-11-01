@@ -696,30 +696,22 @@ mod tests {
     }
 
     #[test]
-    fn latin_words_do_not_read_as_cyrillic() {
-        // windows-1251 has І і (0xB2 0xB3) and д (0xE4) where windows-1252 has ² ³ ä: a letter
-        // glued to a Latin word is read as Latin.
-        for (bytes, text) in [(&b"Fl\xe4che m\xb2"[..], "Fläche m²"), (b"Volumen m\xb3", "Volumen m³"), (b"Gr\xf6\xdfe \xb2", "Größe ²")] {
-            let f = parse(&one_action("Größe ändern", "Aktion 1", vec![bare(AtnEvent::name("x"), bytes)])).unwrap();
-            assert_eq!((f.encoding.as_deref(), labels(&f)), (Some("windows-1252"), vec![text.to_string()]));
-        }
-        // Real windows-1251 names still read as Cyrillic, alone, as a set, and beside Latin.
-        let words: [&[u8]; 4] = [
+    fn russian_sets_with_latin_compounds_stay_windows_1251() {
+        // Ordinary windows-1251 names plus one glued to a Latin word ("CMYKканал"): the whole
+        // set reads as Cyrillic, with no warning.
+        let words: [&[u8]; 5] = [
             b"\xcd\xee\xe2\xfb\xe9 \xf1\xeb\xee\xe9",
             b"\xd0\xe0\xe7\xec\xe5\xf0 \xe8\xe7\xee\xe1\xf0\xe0\xe6\xe5\xed\xe8\xff",
             b"\xca\xee\xef\xe8\xff \xf1\xeb\xee\xff 2",
             b"\xca\xe0\xed\xe0\xeb RGB",
+            b"CMYK\xea\xe0\xed\xe0\xeb",
         ];
-        let text = ["Новый слой", "Размер изображения", "Копия слоя 2", "Канал RGB"];
-        for (bytes, text) in words.iter().zip(text) {
-            let f = parse(&one_action("Набор 1", "Операция 1", vec![bare(AtnEvent::name("x"), bytes)])).unwrap();
-            assert_eq!((f.encoding.as_deref(), labels(&f)), (Some("windows-1251"), vec![text.to_string()]));
-            assert!(f.warnings.is_empty(), "{:?}", f.warnings);
-        }
+        let text = ["Новый слой", "Размер изображения", "Копия слоя 2", "Канал RGB", "CMYKканал"];
         let items = words.iter().map(|w| bare(AtnEvent::name("x"), w)).collect();
         let f = parse(&one_action("Набор 1", "Операция 1", items)).unwrap();
         assert_eq!(f.encoding.as_deref(), Some("windows-1251"));
         assert_eq!(labels(&f), text);
+        assert!(f.warnings.is_empty(), "{:?}", f.warnings);
     }
 
     #[test]

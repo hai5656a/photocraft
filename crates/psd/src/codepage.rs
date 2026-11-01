@@ -229,25 +229,15 @@ fn score(enc: &'static Encoding, name: &[u8]) -> (u64, u64) {
 }
 
 /// [`score`] for a single-byte page, where one byte is one character and a non-ASCII byte is a
-/// non-ASCII character: `common` decides which of them count. A letter glued to an ASCII letter
-/// counts only when it is a Latin letter: windows-1252 "Fläche m²" is windows-1251 "Flдche mІ",
-/// and Cyrillic, Greek or Mac Roman's ﬂ inside a Latin word is a misreading (real Cyrillic
-/// names have Cyrillic or spaces around each letter). A letter beside digits or spaces still
-/// counts, so windows-1252 "Preis £5" still reads as windows-1251 "Preis Ј5".
+/// non-ASCII character: `common` decides which of them count.
+///
+/// Known limitation: windows-1251 has Cyrillic letters (І і Ј д) where windows-1252 has ² ³ £ ä,
+/// so a windows-1252 name like "Fläche m²" or "Preis £5" scores higher as windows-1251 ("Flдche
+/// mІ", "Preis Ј5"). Discounting a Cyrillic letter glued to a Latin word would fix those but
+/// break ordinary Russian names such as "CMYKканал" or Ukrainian "Копiя" (Latin i), which turn a
+/// whole set into windows-1252.
 fn single_byte_score(enc: &'static Encoding, name: &[u8], common: impl Fn(char) -> bool) -> (u64, u64) {
-    let chars: Vec<char> = decode(name, enc).chars().collect();
-    let latin_at = |i: Option<usize>| i.and_then(|i| chars.get(i)).is_some_and(char::is_ascii_alphabetic);
-    let (mut c, mut h) = (0u64, 0u64);
-    for (i, &ch) in chars.iter().enumerate() {
-        if ch.is_ascii() {
-            continue;
-        }
-        h = h.saturating_add(1);
-        let glued = latin_at(i.checked_sub(1)) || latin_at(i.checked_add(1));
-        let misread = glued && ch.is_alphabetic() && !('\u{00C0}'..='\u{024F}').contains(&ch);
-        c = c.saturating_add(u64::from(common(ch) && !misread));
-    }
-    (c, h)
+    decode(name, enc).chars().filter(|c| !c.is_ascii()).fold((0, 0), |(c, h), ch| (c.saturating_add(u64::from(common(ch))), h.saturating_add(1)))
 }
 
 /// Whether `ch` is common in Western names, for weighing windows-1252 against Mac Roman: letters
