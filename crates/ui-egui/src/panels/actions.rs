@@ -729,7 +729,9 @@ pub fn panel_menu(app: &mut PhotocraftApp, ui: &mut egui::Ui) {
     if ui.button(tl!("Load Actions…")).clicked() {
         act = Some("load");
     }
-    if ui.add_enabled(any, egui::Button::new(tl!("Save Actions…"))).clicked() {
+    // A selected set folder saves even when empty, as Photoshop saves an empty set.
+    let set_selected = app.ui.actions.selected_set.as_ref().is_some_and(|set| photocraft_engine::actions_edit_cmds::set_names(&app.session).contains(set));
+    if ui.add_enabled(any || set_selected, egui::Button::new(tl!("Save Actions…"))).clicked() {
         act = Some("save");
     }
     let Some(a) = act else { return };

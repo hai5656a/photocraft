@@ -888,6 +888,51 @@ fn save_actions_suggests_a_file_name_without_path_characters() {
     assert_eq!(saved["set"], set, "the file keeps the set's name");
 }
 
+/// An app with no actions and one empty set New Set made, its folder row shown with the panel
+/// menu, and a fake Save dialog whose requests the test reads.
+fn empty_set_save_harness(
+    set: &str,
+) -> (egui_kittest::Harness<'static, PhotocraftApp>, std::rc::Rc<std::cell::RefCell<Vec<crate::file_dialog::FileDialogRequest>>>) {
+    let (file_dialog, asked) = crate::file_dialog::fake(vec![None]);
+    let services = crate::Services { file_dialog: Some(file_dialog), ..Default::default() };
+    let mut app = PhotocraftApp::new(photocraft_engine::Session::new(), services);
+    app.run("file.new", json!({"width": 8, "height": 8})).unwrap();
+    app.run("actions.newSet", json!({"name": set})).unwrap();
+    // With no action, the panel shows its "Record ● … play ▶" hint, which the test fonts lack.
+    let mut h = egui_kittest::Harness::builder().with_size(vec2(360.0, 600.0)).allow_missing_glyphs().build_ui_state(
+        |ui, app| {
+            panel_menu(app, ui);
+            panel(app, ui);
+        },
+        app,
+    );
+    h.run_steps(2);
+    (h, asked)
+}
+
+/// CodeRabbit review on #10459: with no action at all, Save Actions… is still enabled for a
+/// selected empty set (the engine saves it), and stays disabled with nothing to save.
+#[test]
+fn save_actions_is_enabled_for_a_selected_empty_set_with_no_actions() {
+    use egui_kittest::kittest::Queryable;
+    let (mut h, asked) = empty_set_save_harness("Later");
+    h.get_by_label("Save Actions…").click();
+    h.run_steps(2);
+    h.state_mut().poll_file_dialog(&egui::Context::default(), None);
+    assert!(asked.borrow().is_empty(), "no set selected, nothing to save: {:?}", asked.borrow());
+    h.get_by_label("Later").click();
+    h.run_steps(2);
+    assert_eq!(h.state().ui.actions.selected_set.as_deref(), Some("Later"));
+    h.get_by_label("Save Actions…").click();
+    h.run_steps(2);
+    h.state_mut().poll_file_dialog(&egui::Context::default(), None);
+    assert!(
+        matches!(asked.borrow().as_slice(), [crate::file_dialog::FileDialogRequest::Save { suggested }] if suggested == "Later.atn"),
+        "{:?}",
+        asked.borrow()
+    );
+}
+
 #[test]
 fn moving_an_action_next_to_another_set_joins_it() {
     let mut app = PhotocraftApp::new(photocraft_engine::Session::new(), crate::Services::default());
