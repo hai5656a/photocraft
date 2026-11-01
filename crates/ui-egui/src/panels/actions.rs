@@ -101,9 +101,9 @@ fn playback_targets(app: &PhotocraftApp) -> Vec<usize> {
 /// pauses for a step dialog of its own hands the rest to that dialog, which plays them after its OK
 /// (Cancel stops them all, as it stops one action). A pause inside an action it calls resumes only
 /// the called action, so the set stops there rather than run its next action on an unfinished one. Returns the last result with `ran` counting the steps
-/// of all of them, or `None` when there was nothing to play.
-fn play_targets(app: &mut PhotocraftApp, targets: &[usize]) -> Result<Option<Value>, String> {
-    let (mut last, mut ran) = (None, 0u64);
+/// of all of them plus `before` (steps the same Play ran before a pause), or `None` when there was nothing to play.
+fn play_targets(app: &mut PhotocraftApp, targets: &[usize], before: u64) -> Result<Option<Value>, String> {
+    let (mut last, mut ran) = (None, before);
     for (n, &i) in targets.iter().enumerate() {
         let name = app.session.actions.list.get(i).map(|a| a.name.clone());
         let mut v = app.run("actions.play", json!({"action": i}))?;
@@ -115,12 +115,15 @@ fn play_targets(app: &mut PhotocraftApp, targets: &[usize]) -> Result<Option<Val
         }
         last = Some(v);
         if let Some(dialog) = paused.filter(|_| !failed) {
-            let rest = targets.get(n + 1..).unwrap_or_default().to_vec();
+            // By name: the list can be reordered while the dialog is open (`actions.move`).
+            let list = &app.session.actions.list;
+            let rest: Vec<String> = targets.get(n + 1..).unwrap_or_default().iter().filter_map(|i| list.get(*i).map(|a| a.name.clone())).collect();
             let token = app.ui.dialog_mut(dialog).and_then(|d| d.fields.get(RESUME)).and_then(Value::as_u64);
             if let Some(entry) = token.and_then(|t| app.paused_playbacks.paused.get_mut(&t))
                 && name.as_ref() == Some(&entry.action)
             {
                 entry.then = rest;
+                entry.ran = ran;
             }
             break;
         }
@@ -521,7 +524,14 @@ fn save_dialog(app: &mut PhotocraftApp, set: Option<String>) -> Result<Value, St
         .chars()
         .map(|c| if c.is_control() || matches!(c, '/' | '\\' | ':' | '*' | '?' | '"' | '<' | '>' | '|') { '_' } else { c })
         .collect();
-    let file = format!("{}.atn", photocraft_engine::file_cmds::portable_device_name(stem));
+    // A file name holds at most 255 bytes: the stem gets what `.atn` leaves, cut at a character.
+    let mut stem = photocraft_engine::file_cmds::portable_device_name(stem);
+    let mut cut = 255 - ".atn".len();
+    while !stem.is_char_boundary(cut.min(stem.len())) {
+        cut -= 1;
+    }
+    stem.truncate(cut);
+    let file = format!("{stem}.atn");
     app.pick_save(&file, move |app, path| {
         let write = app.services.write.as_mut().ok_or("no writer configured")?;
         write(&path, &bytes)?;
@@ -690,8 +700,11 @@ pub(crate) struct PausedPlayback {
     /// box, automation), which end the call through `resume`, `abandoned` or `stopped`, so the
     /// recording comes back exactly once.
     record: Option<Value>,
-    /// The actions still to play after this one, when Play started a whole set.
-    then: Vec<usize>,
+    /// The actions still to play after this one, by name, when Play started a whole set.
+    then: Vec<String>,
+    /// The steps that Play ran before this pause (earlier actions of the set, and this one's
+    /// steps before the dialog), so the final count covers the whole Play.
+    ran: u64,
 }
 
 /// The paused playbacks, by the token their dialog carries. The dialog's fields hold only the
@@ -705,7 +718,7 @@ pub(crate) struct PausedPlaybacks {
 impl PausedPlaybacks {
     fn pause(&mut self, action: String, from: usize, gate: Option<Gate>) -> u64 {
         self.last = self.last.wrapping_add(1);
-        self.paused.insert(self.last, PausedPlayback { action, from, gate, record: None, then: Vec::new() });
+        self.paused.insert(self.last, PausedPlayback { action, from, gate, record: None, then: Vec::new(), ran: 0 });
         self.last
     }
 
@@ -748,22 +761,29 @@ pub fn resume(app: &mut PhotocraftApp, fields: &serde_json::Map<String, Value>) 
         && entry.action == paused.action
     {
         entry.then = paused.then.clone();
+        entry.ran = paused.ran.saturating_add(1).saturating_add(v.get("ran").and_then(Value::as_u64).unwrap_or(0));
     }
-    // The rest of a set Play started: under the same gate, and only if this action finished.
+    // The count covers the steps this Play ran before the pause, and the step the dialog ran.
+    let ran = paused.ran.saturating_add(1).saturating_add(played.as_ref().ok().and_then(|v| v.get("ran")).and_then(Value::as_u64).unwrap_or(0));
+    if let Ok(Some(o)) = played.as_mut().map(Value::as_object_mut)
+        && o.contains_key("ran")
+    {
+        o.insert("ran".into(), json!(ran));
+    }
+    // The rest of a set Play started: under the same gate, and only if this action finished. An
+    // action of it deleted or renamed meanwhile ends the set there.
     if let Ok(v) = &played
         && !paused.then.is_empty()
         && v.get("failed").is_none()
         && v.get("paused").is_none()
     {
-        let ran = v.get("ran").and_then(Value::as_u64).unwrap_or(0);
-        played = play_targets(app, &paused.then).map(|rest| {
-            let mut rest = rest.unwrap_or(Value::Null);
-            let total = ran.saturating_add(rest.get("ran").and_then(Value::as_u64).unwrap_or(0));
-            if let Some(o) = rest.as_object_mut() {
-                o.insert("ran".into(), json!(total));
-            }
-            rest
-        });
+        let list = &app.session.actions.list;
+        let rest: Vec<usize> = paused.then.iter().map_while(|name| list.iter().position(|a| &a.name == name)).collect();
+        match play_targets(app, &rest, ran) {
+            Ok(Some(r)) => played = Ok(r),
+            Ok(None) => {}
+            Err(e) => played = Err(e),
+        }
     }
     app.session.authorize = saved;
     match played {
@@ -842,7 +862,7 @@ pub fn panel_menu(app: &mut PhotocraftApp, ui: &mut egui::Ui) {
         "stopRec" => app.run("actions.stop", json!({})),
         "play" => {
             let targets = playback_targets(app);
-            play_targets(app, &targets).map(|v| {
+            play_targets(app, &targets, 0).map(|v| {
                 if let Some(v) = &v {
                     report_play(app, v);
                 }
@@ -1363,7 +1383,7 @@ pub fn panel(app: &mut PhotocraftApp, ui: &mut egui::Ui) {
         }
     });
     if let Some(targets) = play_idx {
-        match play_targets(app, &targets) {
+        match play_targets(app, &targets, 0) {
             Ok(Some(v)) => report_play(app, &v),
             Ok(None) => {}
             Err(e) => {

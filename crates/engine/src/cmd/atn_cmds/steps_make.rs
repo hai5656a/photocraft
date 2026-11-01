@@ -44,8 +44,8 @@ fn pattern_desc(p: &Value) -> Option<Descriptor> {
     let mut t = desc("patternLayer");
     match (jstr(p, "pattern"), jstr(p, "patternName")) {
         (Some(id), Some(n)) => t = t.with("Ptrn", D::Descriptor(desc("Ptrn").with("Nm  ", text(n)).with("Idnt", text(id)))),
-        (Some(n), None) => t = t.with("Ptrn", D::Descriptor(desc("Ptrn").with("Nm  ", text(n)))),
-        _ => {}
+        (Some(n), None) | (None, Some(n)) => t = t.with("Ptrn", D::Descriptor(desc("Ptrn").with("Nm  ", text(n)))),
+        (None, None) => {}
     }
     if let Some(s) = jnum(p, "scale") {
         t = t.with("Scl ", pct(s));

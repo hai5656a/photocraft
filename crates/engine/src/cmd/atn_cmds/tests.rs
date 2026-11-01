@@ -2336,6 +2336,13 @@ fn partial_levels_edits_refuse_strict_export() {
         json!({"kind": "levels", "inBlack": 1, "inWhite": 250, "blue": {"outBlack": 3}}),
         // A value of the wrong shape is no value: the other end is then alone.
         json!({"kind": "levels", "inBlack": 31, "inWhite": "239"}),
+        // CodeRabbit on batch 11: both ends of the wrong shape, or a channel that isn't an object,
+        // would be written as nothing too.
+        json!({"kind": "levels", "inBlack": "31", "inWhite": "239"}),
+        json!({"kind": "levels", "gamma": "1.2"}),
+        json!({"kind": "levels", "red": 5}),
+        json!({"kind": "levels", "green": [0, 255]}),
+        json!({"kind": "levels", "blue": {"outBlack": "3", "outWhite": "250"}}),
     ] {
         let err = export("Audit8", &[&one(p.clone())], &[], false).unwrap_err();
         assert!(err.contains("`layer.setAdjustment`"), "{p}: {err}");
@@ -3244,9 +3251,9 @@ fn hue_saturation_uses_photoshops_hue_key() {
 #[test]
 fn camera_raw_filter_steps_import_as_filter_camera_raw() {
     let int = |v: i32| D::Integer(v);
-    let mut d = desc("null")
-        .with("CrVe", D::Text(UnicodeString::new_nul("16.1.1")))
-        .with("PrVe", int(184_549_376))
+    // Every step carries the version keys a recording has (a verified process version).
+    let cr = || desc("null").with("CrVe", D::Text(UnicodeString::new_nul("16.1.1"))).with("PrVN", int(5)).with("PrVe", int(184_549_376));
+    let mut d = cr()
         .with("WBal", enm("WBal", "Cst "))
         .with("Temp", int(12))
         .with("Tint", int(-4))
@@ -3278,21 +3285,28 @@ fn camera_raw_filter_steps_import_as_filter_camera_raw() {
         d = d.with(&format!("HA_{k}"), int(v));
     }
     d = d.with("SA_O", int(-15));
-    let calibrated = desc("null").with("Ex12", D::Double(0.2)).with("RHue", int(8));
-    let smoothed = desc("null").with("CNR ", int(25)).with("CNRS", int(70));
-    let auto_wb = desc("null").with("WBal", enm("WBal", "Atmt")).with("Temp", int(5));
-    let partial_splits = desc("null").with("PC_1", int(20));
-    let odd_curve = desc("null").with("Crv ", int(3));
+    let calibrated = cr().with("Ex12", D::Double(0.2)).with("RHue", int(8));
+    let smoothed = cr().with("CNR ", int(25)).with("CNRS", int(70));
+    let auto_wb = cr().with("WBal", enm("WBal", "Atmt")).with("Temp", int(5));
+    let partial_splits = cr().with("PC_1", int(20));
+    let odd_curve = cr().with("Crv ", int(3));
     // Review of #8714: values that would replay differently, or fail to play, stay Photoshop steps.
-    let reversed_splits = desc("null").with("PC_1", int(80)).with("PC_2", int(50)).with("PC_3", int(20));
-    let split_past_100 = desc("null").with("PC_1", int(20)).with("PC_2", int(50)).with("PC_3", int(120));
-    let one_point_curve = desc("null").with("Crv ", D::List([0, 0].map(int).to_vec()));
-    let unordered_curve = desc("null").with("CrvG", D::List([0, 0, 128, 90, 64, 50, 255, 255].map(int).to_vec()));
-    let text_contrast = desc("null").with("Cr12", D::Text(UnicodeString::new_nul("ten")));
-    let text_hue = desc("null").with("HA_R", D::Text(UnicodeString::new_nul("red")));
-    let text_grade = desc("null").with("STSH", D::Text(UnicodeString::new_nul("blue")));
-    let exposure_past_5 = desc("null").with("Ex12", D::Double(6.0));
-    let negative_sharpening = desc("null").with("Shrp", int(-10));
+    let reversed_splits = cr().with("PC_1", int(80)).with("PC_2", int(50)).with("PC_3", int(20));
+    let split_past_100 = cr().with("PC_1", int(20)).with("PC_2", int(50)).with("PC_3", int(120));
+    let one_point_curve = cr().with("Crv ", D::List([0, 0].map(int).to_vec()));
+    let unordered_curve = cr().with("CrvG", D::List([0, 0, 128, 90, 64, 50, 255, 255].map(int).to_vec()));
+    let text_contrast = cr().with("Cr12", D::Text(UnicodeString::new_nul("ten")));
+    let text_hue = cr().with("HA_R", D::Text(UnicodeString::new_nul("red")));
+    let text_grade = cr().with("STSH", D::Text(UnicodeString::new_nul("blue")));
+    let exposure_past_5 = cr().with("Ex12", D::Double(6.0));
+    let negative_sharpening = cr().with("Shrp", int(-10));
+    // CodeRabbit on batch 11: a process version the PSD mapping hasn't verified renders differently.
+    let unknown_version =
+        desc("null").with("CrVe", D::Text(UnicodeString::new_nul("16.1.1"))).with("PrVN", int(4)).with("PrVe", int(184_549_376)).with("Ex12", D::Double(0.2));
+    let no_version_number = desc("null").with("CrVe", D::Text(UnicodeString::new_nul("16.1.1"))).with("PrVe", int(184_549_376)).with("Ex12", D::Double(0.2));
+    let mismatched_pair =
+        desc("null").with("CrVe", D::Text(UnicodeString::new_nul("16.1.1"))).with("PrVN", int(6)).with("PrVe", int(184_549_376)).with("Ex12", D::Double(0.2));
+    let no_camera_raw_version = desc("null").with("PrVN", int(5)).with("PrVe", int(184_549_376)).with("Ex12", D::Double(0.2));
     let items = vec![
         item("Adobe Camera Raw Filter", "Camera Raw Filter", Some(d)),
         item("Adobe Camera Raw Filter", "Camera Raw Filter", Some(calibrated)),
@@ -3309,6 +3323,10 @@ fn camera_raw_filter_steps_import_as_filter_camera_raw() {
         item("Adobe Camera Raw Filter", "Camera Raw Filter", Some(text_grade)),
         item("Adobe Camera Raw Filter", "Camera Raw Filter", Some(exposure_past_5)),
         item("Adobe Camera Raw Filter", "Camera Raw Filter", Some(negative_sharpening)),
+        item("Adobe Camera Raw Filter", "Camera Raw Filter", Some(unknown_version)),
+        item("Adobe Camera Raw Filter", "Camera Raw Filter", Some(no_version_number)),
+        item("Adobe Camera Raw Filter", "Camera Raw Filter", Some(mismatched_pair)),
+        item("Adobe Camera Raw Filter", "Camera Raw Filter", Some(no_camera_raw_version)),
     ];
     let file = AtnFile {
         name: UnicodeString::new_nul("Looks"),
@@ -3338,7 +3356,7 @@ fn camera_raw_filter_steps_import_as_filter_camera_raw() {
     for (k, (id, _)) in steps.iter().enumerate().skip(1) {
         assert_eq!(id, PHOTOSHOP_STEP, "step {k}");
     }
-    assert_eq!(imp.unsupported.iter().map(|u| u.step).collect::<Vec<_>>(), (1..=14).collect::<Vec<_>>());
+    assert_eq!(imp.unsupported.iter().map(|u| u.step).collect::<Vec<_>>(), (1..=18).collect::<Vec<_>>());
     // The imported step plays.
     let mut s = Session::new();
     s.execute("file.new", json!({"width": 16, "height": 12})).unwrap();
@@ -3354,6 +3372,7 @@ fn camera_raw_filter_steps_import_as_filter_camera_raw() {
 fn loaded_camera_raw_filter_steps_save_back_unchanged() {
     let recorded = desc("null")
         .with("CrVe", D::Text(UnicodeString::new_nul("16.1.1")))
+        .with("PrVN", D::Integer(5))
         .with("PrVe", D::Integer(184_549_376))
         .with("WBal", enm("WBal", "Cst "))
         .with("Ex12", D::Double(0.35))
@@ -3398,13 +3417,14 @@ fn loaded_camera_raw_filter_steps_save_back_unchanged() {
 /// and is reported, rather than replaying without that processing.
 #[test]
 fn camera_raw_filter_steps_with_unknown_keys_stay_photoshop_steps() {
-    let upright = desc("null").with("Ex12", D::Double(0.2)).with("PerV", D::Integer(20));
-    let profile = desc("null").with("Cr12", D::Integer(10)).with("LookName", D::Text(UnicodeString::new_nul("B&W 05")));
+    let cr = || desc("null").with("CrVe", D::Text(UnicodeString::new_nul("16.1.1"))).with("PrVN", D::Integer(5)).with("PrVe", D::Integer(184_549_376));
+    let upright = cr().with("Ex12", D::Double(0.2)).with("PerV", D::Integer(20));
+    let profile = cr().with("Cr12", D::Integer(10)).with("LookName", D::Text(UnicodeString::new_nul("B&W 05")));
     let file = one_action(vec![
         item("Adobe Camera Raw Filter", "Camera Raw Filter", Some(upright.clone())),
         item("Adobe Camera Raw Filter", "Camera Raw Filter", Some(profile)),
         item("Adobe Camera Raw Filter", "Camera Raw Filter", None),
-        item("Adobe Camera Raw Filter", "Camera Raw Filter", Some(desc("null").with("Ex12", D::Double(0.2)))),
+        item("Adobe Camera Raw Filter", "Camera Raw Filter", Some(cr().with("Ex12", D::Double(0.2)))),
     ]);
     let mut s = Session::new();
     let loaded = s.execute("actions.load", json!({"data": b64(&atn::write(&file).unwrap())})).unwrap();
@@ -3621,6 +3641,35 @@ fn pattern_fill_ids_beat_names_across_document_and_library() {
         assert!(r.get("failed").is_none(), "{action}: {r}");
         assert_eq!(pixel(&mut s), want, "{action}");
     }
+}
+
+/// CodeRabbit on batch 11: a pattern step that names its pattern only by `patternName` exports
+/// that name, rather than a step with no pattern (which plays the current one).
+#[test]
+fn pattern_steps_named_only_by_pattern_name_export_the_name() {
+    let one = Action { name: "P".into(), steps: vec![("layer.newFillLayer.pattern".into(), json!({"patternName": "Checkerboard"}))], ..Default::default() };
+    let (bytes, skipped) = export("Pat", &[&one], &[], false).unwrap();
+    assert!(skipped.is_empty());
+    let steps = import(&bytes).unwrap().actions[0].steps.clone();
+    assert_eq!(steps[0].0, "layer.newFillLayer.pattern");
+    assert_eq!(steps[0].1["pattern"], json!("Checkerboard"), "{}", steps[0].1);
+}
+
+/// CodeRabbit on batch 11: when the recorded id is installed nowhere, the recorded name is looked
+/// up as a name only. A pattern whose id equals that name text doesn't beat the one named so.
+#[test]
+fn pattern_fill_name_fallback_matches_names_not_ids() {
+    let mut s = Session::new();
+    s.execute("file.new", json!({"width": 4, "height": 4, "mode": "rgb", "depth": 8})).unwrap();
+    let red = define_pattern(&mut s, "#ff0000", "Red");
+    // Green is named like the red pattern's id.
+    define_pattern(&mut s, "#00ff00", &red);
+    let data = set_of("Pat", vec![("NameIsAnId", vec![pattern_fill_step("5e1c0000-aaaa-4bbb-8ccc-000000000000", &red)])]);
+    s.execute("actions.load", json!({"data": data})).unwrap();
+    s.execute("file.new", json!({"width": 4, "height": 4, "mode": "rgb", "depth": 8})).unwrap();
+    let r = s.execute("actions.play", json!({"action": "NameIsAnId"})).unwrap();
+    assert!(r.get("failed").is_none(), "{r}");
+    assert_eq!(pixel(&mut s), [0.0, 1.0, 0.0, 1.0]);
 }
 
 /// A recorded pattern installed neither by id nor by name fails with an error that names the

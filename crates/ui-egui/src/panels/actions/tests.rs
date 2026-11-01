@@ -721,6 +721,19 @@ fn play_with_an_empty_set_selected_plays_nothing() {
     assert!(layer_names(h.state()).is_empty(), "{:?}", layer_names(h.state()));
 }
 
+/// CodeRabbit on batch 11: with an empty set selected, Batch and Create Droplet start on the first
+/// action, as `selected_action` documents.
+#[test]
+fn an_empty_selected_set_falls_back_to_the_first_action() {
+    use egui_kittest::kittest::Queryable;
+    let mut h = two_set_panel();
+    h.state_mut().run("actions.newSet", json!({"name": "Print"})).unwrap();
+    h.run_steps(2);
+    h.get_by_label("Print").click();
+    h.run_steps(2);
+    assert_eq!(selected_action(h.state()).map(|a| a.name.as_str()), Some("Resize"));
+}
+
 /// #10459 fix-up: the common case is unchanged: a selected action plays alone, also after a set
 /// folder was selected before it, and a later Delete doesn't bring that set back.
 #[test]
@@ -832,8 +845,39 @@ fn a_set_paused_at_a_step_dialog_plays_its_other_actions_after_ok() {
         let mut names = layer_names(h.state());
         names.sort();
         assert_eq!(names, ["a", "a2", "b"], "B played after A's dialogs");
-        assert!(h.state().ui.status.starts_with("Played"), "{}", h.state().ui.status);
+        // CodeRabbit on batch 11: the count covers the whole Play, also the steps before each pause.
+        assert_eq!(h.state().ui.status, "Played 5 steps");
     }
+}
+
+/// CodeRabbit on batch 11: the rest of a paused set is kept by name, so an action moved into the
+/// middle of the list while the dialog is open neither plays in its place nor skips one of the set.
+#[test]
+fn a_set_paused_at_a_dialog_plays_its_own_actions_after_a_move() {
+    use egui_kittest::kittest::Queryable;
+    let mut app = PhotocraftApp::new(photocraft_engine::Session::new(), crate::Services::default());
+    app.run("file.new", json!({"width": 8, "height": 8})).unwrap();
+    for (name, set, layer) in [("A", "S", "a"), ("B", "S", "b"), ("C", "S", "c"), ("X", "Other", "x")] {
+        let mut a = Action::new(name, vec![("layer.new.layer".into(), json!({"name": layer}))]);
+        a.set = Some(set.into());
+        app.session.actions.list.push(a);
+    }
+    app.session.actions.list[0].steps.push(("filter.blur.gaussianBlur".into(), json!({"radius": 1})));
+    app.session.actions.list[0].dialogs.insert(1);
+    let mut h = egui_kittest::Harness::builder().with_size(vec2(360.0, 400.0)).build_ui_state(|ui, app| panel(app, ui), app);
+    h.run_steps(2);
+    h.get_by_label("S").click();
+    h.run_steps(2);
+    h.get_by_label("Play selection").click();
+    h.run_steps(2);
+    assert_eq!(layer_names(h.state()), ["a"]);
+    let dialog = h.state().ui.dialogs.last().map(|d| d.id).expect("the blur's dialog");
+    h.state_mut().run("actions.move", json!({"action": "X", "to": 1})).unwrap();
+    crate::dialogs::confirm(h.state_mut(), dialog).unwrap();
+    h.run_steps(2);
+    let mut names = layer_names(h.state());
+    names.sort();
+    assert_eq!(names, ["a", "b", "c"]);
 }
 
 /// #10459 fix-up: a set whose action pauses at a dialog inside an action it calls stops there:
@@ -1198,6 +1242,23 @@ fn save_actions_suggests_a_windows_safe_name_for_device_and_control_character_se
             asked.borrow()
         );
     }
+}
+
+/// CodeRabbit on batch 11: a set name longer than a file name may be is cut to 255 bytes with its
+/// suffix, at a character boundary.
+#[test]
+fn save_actions_suggests_a_file_name_of_at_most_255_bytes() {
+    use egui_kittest::kittest::Queryable;
+    let set = "é".repeat(200);
+    let (mut h, asked) = empty_set_save_harness(&set);
+    h.get_by_label(set.as_str()).click();
+    h.run_steps(2);
+    h.get_by_label("Save Actions…").click();
+    h.run_steps(2);
+    h.state_mut().poll_file_dialog(&egui::Context::default(), None);
+    let asked = asked.borrow();
+    let [crate::file_dialog::FileDialogRequest::Save { suggested }] = asked.as_slice() else { panic!("{asked:?}") };
+    assert_eq!(*suggested, format!("{}.atn", "é".repeat(125)));
 }
 
 #[test]

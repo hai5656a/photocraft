@@ -23,7 +23,8 @@
 //! Only the first [`GUESS_SAMPLE`] bytes of names are examined.
 
 use encoding_rs::{
-    BIG5, DecoderResult, EUC_KR, Encoding, GBK, MACINTOSH, REPLACEMENT, SHIFT_JIS, UTF_8, UTF_16BE, UTF_16LE, WINDOWS_1251, WINDOWS_1252, X_USER_DEFINED,
+    BIG5, DecoderResult, EUC_KR, Encoding, GBK, ISO_2022_JP, MACINTOSH, REPLACEMENT, SHIFT_JIS, UTF_8, UTF_16BE, UTF_16LE, WINDOWS_1251, WINDOWS_1252,
+    X_USER_DEFINED,
 };
 
 use crate::error::{PsdError, Result};
@@ -142,10 +143,11 @@ pub(crate) fn reads_as_common(name: &[u8], enc: &'static Encoding) -> bool {
 
 /// Resolves an encoding label (`shift_jis`, `gbk`, `big5`, `euc-kr`, `windows-1252`, `utf-8`…;
 /// case and surrounding whitespace are ignored). Labels for encodings that cannot hold an 8-bit
-/// name are rejected.
+/// name are rejected, and so is ISO-2022-JP: its names are 7-bit escape sequences, which would
+/// pass through as ASCII.
 pub(crate) fn resolve_label(label: &str) -> Result<&'static Encoding> {
     match Encoding::for_label(label.as_bytes()) {
-        Some(enc) if ![REPLACEMENT, UTF_16LE, UTF_16BE, X_USER_DEFINED].contains(&enc) => Ok(enc),
+        Some(enc) if ![REPLACEMENT, UTF_16LE, UTF_16BE, X_USER_DEFINED, ISO_2022_JP].contains(&enc) => Ok(enc),
         _ => Err(PsdError::Unsupported(format!("text encoding `{label}`: use a label such as shift_jis, gbk, big5, euc-kr, windows-1252 or utf-8"))),
     }
 }
@@ -540,7 +542,7 @@ mod tests {
         for ok in ["shift_jis", "gbk", "big5", "euc-kr", "windows-1252", "utf-8"] {
             assert!(resolve_label(ok).is_ok(), "{ok}");
         }
-        for bad in ["nope", "replacement", "utf-16le", "x-user-defined", "", "iso-2022-kr"] {
+        for bad in ["nope", "replacement", "utf-16le", "x-user-defined", "", "iso-2022-kr", "iso-2022-jp", "csISO2022JP"] {
             let Err(e) = resolve_label(bad) else { panic!("{bad} should be rejected") };
             assert!(e.to_string().contains("shift_jis"), "{e}");
         }

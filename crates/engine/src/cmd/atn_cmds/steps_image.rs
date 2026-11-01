@@ -316,7 +316,8 @@ const CAMERA_RAW_GRADES: &[&str] =
 /// Settings the command has no counterpart for refuse the step rather than replaying a different
 /// look: the Calibration panel, a white balance other than Custom, the controls the PSD mapping
 /// keeps only at their neutral values, and any key outside this table (lens, geometry, profile,
-/// masks…), as the PSD mapping's `known_key` does.
+/// masks…), as the PSD mapping's `known_key` does, and a process version the PSD mapping hasn't
+/// verified (Camera Raw renders each version differently).
 pub(super) fn camera_raw_from(d: &Descriptor) -> Mapped {
     const CALIBRATION: &[&str] = &["RHue", "RSat", "GHue", "GSat", "BHue", "BSat", "BlkB"];
     const NEUTRAL_ONLY: &[(&str, f64)] =
@@ -333,6 +334,11 @@ pub(super) fn camera_raw_from(d: &Descriptor) -> Mapped {
     // An empty step (no descriptor) would play as a no-op, and a key the table doesn't know may
     // be active processing (lens, geometry, profile, masks) that playback would leave out.
     if d.items.is_empty() || d.items.iter().any(|(k, _)| !std::str::from_utf8(k.as_bytes()).is_ok_and(known)) {
+        return Mapped::Unsupported { harmless: false };
+    }
+    let version = (get_num(d, "PrVN"), get_num(d, "PrVe"));
+    let verified = [(5.0, 184_549_376.0), (6.0, 251_920_384.0)].iter().any(|(n, v)| version == (Some(*n), Some(*v)));
+    if !verified || !matches!(d.get("CrVe"), Some(D::Text(_))) {
         return Mapped::Unsupported { harmless: false };
     }
     let active = |k: &str, neutral: f64| d.get(k).is_some() && get_num(d, k) != Some(neutral);

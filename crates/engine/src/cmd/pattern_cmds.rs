@@ -197,7 +197,11 @@ pub(crate) fn resolve_or_named(s: &Session, key: &str, p: &Value) -> std::result
     let in_doc = |id: &str, name: &str| s.active().and_then(|d| find(&d.doc.patterns, id, name)).map(|p| (p, false));
     let by_key = |k: &str| in_doc(k, k).or_else(|| library_pattern(s, k).map(|p| (p, true)));
     let found = match name {
-        Some(n) => in_doc(key, "").or_else(|| find(&s.patterns.items, key, "").map(|p| (p, true))).or_else(|| by_key(n)),
+        // The name is a name: another pattern whose id happens to equal it doesn't count.
+        Some(n) => in_doc(key, "")
+            .or_else(|| find(&s.patterns.items, key, "").map(|p| (p, true)))
+            .or_else(|| in_doc("", n))
+            .or_else(|| find(&s.patterns.items, "", n).map(|p| (p, true))),
         None => by_key(key),
     };
     match found {

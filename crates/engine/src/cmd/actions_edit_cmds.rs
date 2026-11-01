@@ -130,13 +130,8 @@ fn assign_set(s: &mut Session, p: &Value) -> Result<Value> {
 /// Every set name, in the Actions panel's order: the sets of the actions as they first appear,
 /// then the empty ones New Set made.
 pub fn set_names(s: &Session) -> Vec<String> {
-    let mut names: Vec<String> = Vec::new();
-    for set in s.actions.list.iter().filter_map(|a| a.set.as_ref()).chain(&s.actions.sets) {
-        if !names.contains(set) {
-            names.push(set.clone());
-        }
-    }
-    names
+    let mut seen = std::collections::HashSet::new();
+    s.actions.list.iter().filter_map(|a| a.set.as_ref()).chain(&s.actions.sets).filter(|set| seen.insert(set.as_str())).cloned().collect()
 }
 
 /// New Set…: an empty set folder, named `name` or "Set N" (the first number no set has), that New
@@ -463,6 +458,8 @@ mod tests {
         assert_eq!(s.execute("actions.newSet", json!({})).unwrap()["set"], "Set 2");
         assert_eq!(s.execute("actions.newSet", json!({"name": " Retouch "})).unwrap()["set"], "Retouch");
         assert_eq!(set_names(&s), ["Set 1", "Set 2", "Retouch"]);
+        // CodeRabbit on batch 11: Actions List names the empty sets too, so an agent can find them.
+        assert_eq!(s.execute("actions.list", json!({})).unwrap()["sets"], json!(["Set 1", "Set 2", "Retouch"]));
         assert!(s.execute("actions.newSet", json!({"name": "Set 1"})).is_err(), "a set an action is in");
         assert!(s.execute("actions.newSet", json!({"name": "Retouch"})).is_err(), "an empty set");
         assert!(s.execute("actions.newSet", json!({"name": " "})).is_err());
