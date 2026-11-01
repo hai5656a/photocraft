@@ -59,6 +59,11 @@ pub(super) fn load(s: &mut Session, p: &Value) -> Result<Value> {
         }
     }
     s.actions.list.extend(added);
+    // A set saved with no actions (Photoshop saves an empty set) is an empty folder, like one New
+    // Set made.
+    if !s.actions.list.iter().any(|a| a.set.as_deref() == Some(imp.set.as_str())) && !s.actions.sets.contains(&imp.set) {
+        s.actions.sets.push(imp.set.clone());
+    }
     let keys: Vec<(String, String)> = imp.function_keys.into_iter().map(|(n, k)| (renamed.get(&n).cloned().unwrap_or(n), k)).collect();
     if !keys.is_empty() {
         s.edit_prefs(|prefs| {
@@ -90,6 +95,9 @@ pub(super) fn save(s: &mut Session, p: &Value) -> Result<Value> {
     };
     let set_param = match p.get("set") {
         None | Some(Value::Null) => None,
+        // A set is found by its exact name, as `actions.record` finds it: one loaded from a
+        // Photoshop file or an older actions.json may have surrounding spaces. Others are trimmed.
+        Some(Value::String(n)) if crate::actions_edit_cmds::set_names(s).contains(n) => Some(n.clone()),
         Some(Value::String(n)) if !n.trim().is_empty() => Some(n.trim().to_string()),
         Some(_) => return Err(bad(cmd, "`set` must be a non-empty string")),
     };
@@ -99,16 +107,17 @@ pub(super) fn save(s: &mut Session, p: &Value) -> Result<Value> {
         (set_param.or_else(|| a.set.clone()).unwrap_or_else(|| a.name.clone()), vec![a])
     } else if let Some(set) = set_param {
         let list: Vec<&Action> = s.actions.list.iter().filter(|a| a.set.as_deref() == Some(set.as_str())).collect();
-        if list.is_empty() {
+        // An empty set New Set made is written with no actions, as Photoshop saves one.
+        if list.is_empty() && !s.actions.sets.contains(&set) {
             return Err(bad(cmd, format!("no actions in a set named `{set}`")));
         }
         (set, list)
     } else {
+        if s.actions.list.is_empty() {
+            return Err(bad(cmd, "there are no actions to save"));
+        }
         (DEFAULT_SET.to_string(), s.actions.list.iter().collect())
     };
-    if actions.is_empty() {
-        return Err(bad(cmd, "there are no actions to save"));
-    }
     let names: Vec<String> = actions.iter().map(|a| a.name.clone()).collect();
     let keys: Vec<(String, String)> =
         s.prefs().shortcuts.iter().filter_map(|(k, v)| k.strip_prefix(crate::actions_cmds::PLAY_SHORTCUT_PREFIX).map(|n| (n.to_string(), v.clone()))).collect();
