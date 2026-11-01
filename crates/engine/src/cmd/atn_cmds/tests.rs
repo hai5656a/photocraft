@@ -774,6 +774,8 @@ fn every_mapped_command_exports_and_imports_back() {
         "filter.sharpen.sharpen",
         "filter.sharpen.sharpenEdges",
         "filter.sharpen.sharpenMore",
+        // Saves back only as the descriptor it was loaded from (loaded_camera_raw_filter_steps_save_back_unchanged).
+        "filter.cameraRaw",
     ];
     let unexpected: Vec<&str> = missing.iter().copied().filter(|id| !allowed.contains(id)).collect();
     assert!(unexpected.is_empty(), "add round-trip cases for {unexpected:?}");
@@ -3214,6 +3216,186 @@ fn hue_saturation_uses_photoshops_hue_key() {
     let mut p = back.actions[0].steps[0].1.clone();
     normalise(&mut p);
     assert_eq!(p["hue"], json!(30), "{p}");
+}
+
+/// #6745: a recorded Camera Raw Filter step (`Adobe Camera Raw Filter`, the layout of 62 real
+/// recordings) imports as `filter.cameraRaw` with its sliders, colour mixer, grading wheels,
+/// vignette style and point curves, and plays. One that uses the Calibration panel (or noise
+/// settings the command lacks) stays a Photoshop step rather than replaying a different look.
+#[test]
+fn camera_raw_filter_steps_import_as_filter_camera_raw() {
+    let int = |v: i32| D::Integer(v);
+    let mut d = desc("null")
+        .with("CrVe", D::Text(UnicodeString::new_nul("16.1.1")))
+        .with("PrVe", int(184_549_376))
+        .with("WBal", enm("WBal", "Cst "))
+        .with("Temp", int(12))
+        .with("Tint", int(-4))
+        .with("Ex12", D::Double(0.35))
+        .with("Cr12", int(10))
+        .with("Hi12", int(-30))
+        .with("Sh12", int(25))
+        .with("Cl12", int(8))
+        .with("Vibr", int(15))
+        .with("PC_1", int(20))
+        .with("PC_2", int(50))
+        .with("PC_3", int(80))
+        .with("STSH", int(210))
+        .with("STSS", int(12))
+        .with("CgSL", int(0))
+        .with("CgBl", int(60))
+        .with("STB ", int(-10))
+        .with("Shrp", int(40))
+        .with("ShpR", D::Double(1.2))
+        .with("LNR ", int(20))
+        .with("LNRC", int(0))
+        .with("CNR ", int(25))
+        .with("CNRS", int(50))
+        .with("PCVA", int(-20))
+        .with("PCVS", int(2))
+        .with("Crv ", D::List([0, 0, 64, 50, 255, 255].map(int).to_vec()))
+        .with("CrvR", D::List([0, 0, 255, 255].map(int).to_vec()));
+    for (k, v) in ["R", "O", "Y", "G", "A", "B", "P", "M"].iter().zip(1..) {
+        d = d.with(&format!("HA_{k}"), int(v));
+    }
+    d = d.with("SA_O", int(-15));
+    let calibrated = desc("null").with("Ex12", D::Double(0.2)).with("RHue", int(8));
+    let smoothed = desc("null").with("CNR ", int(25)).with("CNRS", int(70));
+    let auto_wb = desc("null").with("WBal", enm("WBal", "Atmt")).with("Temp", int(5));
+    let partial_splits = desc("null").with("PC_1", int(20));
+    let odd_curve = desc("null").with("Crv ", int(3));
+    // Review of #8714: values that would replay differently, or fail to play, stay Photoshop steps.
+    let reversed_splits = desc("null").with("PC_1", int(80)).with("PC_2", int(50)).with("PC_3", int(20));
+    let split_past_100 = desc("null").with("PC_1", int(20)).with("PC_2", int(50)).with("PC_3", int(120));
+    let one_point_curve = desc("null").with("Crv ", D::List([0, 0].map(int).to_vec()));
+    let unordered_curve = desc("null").with("CrvG", D::List([0, 0, 128, 90, 64, 50, 255, 255].map(int).to_vec()));
+    let text_contrast = desc("null").with("Cr12", D::Text(UnicodeString::new_nul("ten")));
+    let text_hue = desc("null").with("HA_R", D::Text(UnicodeString::new_nul("red")));
+    let text_grade = desc("null").with("STSH", D::Text(UnicodeString::new_nul("blue")));
+    let exposure_past_5 = desc("null").with("Ex12", D::Double(6.0));
+    let negative_sharpening = desc("null").with("Shrp", int(-10));
+    let items = vec![
+        item("Adobe Camera Raw Filter", "Camera Raw Filter", Some(d)),
+        item("Adobe Camera Raw Filter", "Camera Raw Filter", Some(calibrated)),
+        item("Adobe Camera Raw Filter", "Camera Raw Filter", Some(smoothed)),
+        item("Adobe Camera Raw Filter", "Camera Raw Filter", Some(auto_wb)),
+        item("Adobe Camera Raw Filter", "Camera Raw Filter", Some(partial_splits)),
+        item("Adobe Camera Raw Filter", "Camera Raw Filter", Some(odd_curve)),
+        item("Adobe Camera Raw Filter", "Camera Raw Filter", Some(reversed_splits)),
+        item("Adobe Camera Raw Filter", "Camera Raw Filter", Some(split_past_100)),
+        item("Adobe Camera Raw Filter", "Camera Raw Filter", Some(one_point_curve)),
+        item("Adobe Camera Raw Filter", "Camera Raw Filter", Some(unordered_curve)),
+        item("Adobe Camera Raw Filter", "Camera Raw Filter", Some(text_contrast)),
+        item("Adobe Camera Raw Filter", "Camera Raw Filter", Some(text_hue)),
+        item("Adobe Camera Raw Filter", "Camera Raw Filter", Some(text_grade)),
+        item("Adobe Camera Raw Filter", "Camera Raw Filter", Some(exposure_past_5)),
+        item("Adobe Camera Raw Filter", "Camera Raw Filter", Some(negative_sharpening)),
+    ];
+    let file = AtnFile {
+        name: UnicodeString::new_nul("Looks"),
+        expanded: false,
+        actions: vec![AtnAction { name: UnicodeString::new_nul("Warm"), items, ..Default::default() }],
+        warnings: vec![],
+    };
+    let imp = import(&atn::write(&file).unwrap()).unwrap();
+    let steps = &imp.actions[0].steps;
+    let (id, p) = &steps[0];
+    assert_eq!(id, "filter.cameraRaw");
+    // The recorded descriptor rides along, so Save Actions can write the step back.
+    let mut p = p.clone();
+    assert!(p.as_object_mut().unwrap().remove("__atnDescriptor").is_some(), "{p}");
+    assert_eq!(
+        p,
+        json!({
+            "temperature": 12, "tint": -4, "exposure": 0.35, "contrast": 10, "highlights": -30, "shadows": 25,
+            "clarity": 8, "vibrance": 15, "curveSplits": [20, 50, 80],
+            "hslHue": [1, 2, 3, 4, 5, 6, 7, 8], "hslSat": [0, -15, 0, 0, 0, 0, 0, 0],
+            "gradeShadows": {"hue": 210, "sat": 12, "lum": 0}, "gradeBlending": 60, "gradeBalance": -10,
+            "sharpenAmount": 40, "sharpenRadius": 1.2, "noiseLuminance": 20, "noiseColor": 25,
+            "vignetteAmount": -20, "vignetteStyle": "colorPriority", "pointCurve": [[0, 0], [64, 50], [255, 255]]
+        })
+    );
+    for (k, (id, _)) in steps.iter().enumerate().skip(1) {
+        assert_eq!(id, PHOTOSHOP_STEP, "step {k}");
+    }
+    assert_eq!(imp.unsupported.iter().map(|u| u.step).collect::<Vec<_>>(), (1..=14).collect::<Vec<_>>());
+    // The imported step plays.
+    let mut s = Session::new();
+    s.execute("file.new", json!({"width": 16, "height": 12})).unwrap();
+    s.execute("layer.new.layer", json!({})).unwrap();
+    s.execute("edit.fill", json!({"color": "#808080"})).unwrap();
+    s.execute(id, p.clone()).unwrap();
+}
+
+/// Review of #8714: a Camera Raw Filter step that was loaded saves back as the recorded step,
+/// byte for byte, as it did while it was a kept Photoshop step; once edited (or when PhotoCraft
+/// recorded it) Save Actions refuses it as before. The loaded step plays.
+#[test]
+fn loaded_camera_raw_filter_steps_save_back_unchanged() {
+    let recorded = desc("null")
+        .with("CrVe", D::Text(UnicodeString::new_nul("16.1.1")))
+        .with("PrVe", D::Integer(184_549_376))
+        .with("WBal", enm("WBal", "Cst "))
+        .with("Ex12", D::Double(0.35))
+        .with("Cr12", D::Integer(10))
+        .with("Crv ", D::List([0, 0, 64, 50, 255, 255].map(D::Integer).to_vec()));
+    let file = one_action(vec![item("Adobe Camera Raw Filter", "Camera Raw Filter", Some(recorded.clone()))]);
+    let mut s = Session::new();
+    let loaded = s.execute("actions.load", json!({"data": b64(&atn::write(&file).unwrap())})).unwrap();
+    assert_eq!(loaded["unsupported"], json!([]), "{loaded}");
+    assert_eq!(s.actions.list[0].steps[0].0, "filter.cameraRaw");
+    let saved_step = |r: &Value| {
+        let saved = atn::parse(&photocraft_paint::tile::b64_decode(r["data"].as_str().unwrap()).unwrap()).unwrap();
+        saved.actions[0].items.first().map(|i| (i.event.clone(), i.descriptor.clone()))
+    };
+    // Strict save, and the Actions panel's save (which skips what can't be written).
+    for skip in [false, true] {
+        let r = s.execute("actions.save", json!({"action": "A", "skipUnsupported": skip})).unwrap();
+        assert_eq!(r["skipped"], json!([]), "{r}");
+        assert_eq!(saved_step(&r), Some((AtnEvent::name("Adobe Camera Raw Filter"), Some(recorded.clone()))));
+    }
+    // It plays.
+    s.execute("file.new", json!({"width": 16, "height": 12})).unwrap();
+    s.execute("layer.new.layer", json!({})).unwrap();
+    s.execute("edit.fill", json!({"color": "#808080"})).unwrap();
+    let played = s.execute("actions.play", json!({"action": "A"})).unwrap();
+    assert_eq!(played["ran"], 1, "{played}");
+    assert!(played.get("failed").is_none(), "{played}");
+    // Edited, it no longer matches what was recorded.
+    let original = s.actions.list[0].steps[0].1.clone();
+    s.actions.list[0].steps[0].1["exposure"] = json!(1.5);
+    let e = s.execute("actions.save", json!({"action": "A"})).unwrap_err().to_string();
+    assert!(e.contains("filter.cameraRaw"), "{e}");
+    // Recorded by PhotoCraft: no descriptor to write back.
+    s.actions.list[0].steps[0].1 = original;
+    s.actions.list[0].steps[0].1.as_object_mut().unwrap().remove("__atnDescriptor");
+    let r = s.execute("actions.save", json!({"action": "A", "skipUnsupported": true})).unwrap();
+    assert_eq!(r["skipped"].as_array().unwrap().len(), 1, "{r}");
+}
+
+/// Review of #8714: a Camera Raw Filter step with a key the table doesn't map (an Upright
+/// setting, a profile name, any other panel) or with no settings at all stays a Photoshop step
+/// and is reported, rather than replaying without that processing.
+#[test]
+fn camera_raw_filter_steps_with_unknown_keys_stay_photoshop_steps() {
+    let upright = desc("null").with("Ex12", D::Double(0.2)).with("PerV", D::Integer(20));
+    let profile = desc("null").with("Cr12", D::Integer(10)).with("LookName", D::Text(UnicodeString::new_nul("B&W 05")));
+    let file = one_action(vec![
+        item("Adobe Camera Raw Filter", "Camera Raw Filter", Some(upright.clone())),
+        item("Adobe Camera Raw Filter", "Camera Raw Filter", Some(profile)),
+        item("Adobe Camera Raw Filter", "Camera Raw Filter", None),
+        item("Adobe Camera Raw Filter", "Camera Raw Filter", Some(desc("null").with("Ex12", D::Double(0.2)))),
+    ]);
+    let mut s = Session::new();
+    let loaded = s.execute("actions.load", json!({"data": b64(&atn::write(&file).unwrap())})).unwrap();
+    let unsupported: Vec<u64> = loaded["unsupported"].as_array().unwrap().iter().map(|u| u["step"].as_u64().unwrap()).collect();
+    assert_eq!(unsupported, [0, 1, 2], "{loaded}");
+    let ids: Vec<&str> = s.actions.list[0].steps.iter().map(|(id, _)| id.as_str()).collect();
+    assert_eq!(ids, [PHOTOSHOP_STEP, PHOTOSHOP_STEP, PHOTOSHOP_STEP, "filter.cameraRaw"]);
+    // Kept, it still saves back as recorded.
+    let r = s.execute("actions.save", json!({"action": "A"})).unwrap();
+    let saved = atn::parse(&photocraft_paint::tile::b64_decode(r["data"].as_str().unwrap()).unwrap()).unwrap();
+    assert_eq!(saved.actions[0].items[0].descriptor, Some(upright));
 }
 
 fn one_action(items: Vec<AtnItem>) -> AtnFile {
