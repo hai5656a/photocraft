@@ -13,7 +13,7 @@ oracles.
 | `descriptors.atn` | 859 | Every descriptor value variant and every reference form currently represented by the parser | `6c76502822c1f36c8060a71adb227c4540663518785bbab1b70951dac0ef58ad` |
 | `float-bits.atn` | 428 | NaN payload, negative zero, infinities, and floats inside lists, objects and arrays | `0aa6278a569c777f249b305e889896132c2a87e44a24cb1a55d1d3fc0928fd0c` |
 
-`tests/atn_contract.rs` checks the independently encoded bytes and expected public structures.
-The ATN fuzz job copies the same files into its seed corpus. A fixture change should explain
+`tests/it/atn_contract.rs` checks the independently encoded bytes and expected public structures.
+A fixture change should explain
 the changed wire fields and update this table; do not regenerate expectations merely to make a
 failing parser pass.

@@ -631,8 +631,9 @@ PhotoCraft equivalent.
 Events outside the table load as `actions.photoshopStep` steps that keep the descriptor
 verbatim (so Save Actions writes them back) and fail at playback with the step's Photoshop name.
 
-The focused native parser matrix, public-API contract fixtures, scheduled fuzzing and local
-commands are described in [ATN parser tests and CI](atn-testing.md).
+`crates/psd/tests/it/atn_contract.rs` checks the parser's public API against four small,
+independently encoded fixtures in `crates/psd/tests/fixtures/atn/` (provenance and checksums in
+its README): `cargo test -p photocraft-psd --test it atn_contract::`.
 
 ## Remove Tool quality
 

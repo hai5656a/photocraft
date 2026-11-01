@@ -1,4 +1,4 @@
-//! Portable public-API contract, executed natively in debug and release by ATN CI.
+//! Public-API contract for the `.atn` parser, against independently encoded wire fixtures.
 use photocraft_psd::PsdError;
 use photocraft_psd::atn::{self, AtnAction, AtnEvent, AtnFile, AtnItem};
 use photocraft_psd::descriptor::{Class, Descriptor, Id, MAX_DEPTH, ObjectArray, ReferenceItem, UnicodeString, Value};
@@ -7,10 +7,10 @@ use photocraft_psd::descriptor::{Class, Descriptor, Id, MAX_DEPTH, ObjectArray, 
 mod atn_roundtrip;
 
 const FIXTURES: &[(&str, &[u8])] = &[
-    ("empty", include_bytes!("fixtures/atn/empty.atn")),
-    ("metadata", include_bytes!("fixtures/atn/metadata.atn")),
-    ("descriptors", include_bytes!("fixtures/atn/descriptors.atn")),
-    ("float bits", include_bytes!("fixtures/atn/float-bits.atn")),
+    ("empty", include_bytes!("../fixtures/atn/empty.atn")),
+    ("metadata", include_bytes!("../fixtures/atn/metadata.atn")),
+    ("descriptors", include_bytes!("../fixtures/atn/descriptors.atn")),
+    ("float bits", include_bytes!("../fixtures/atn/float-bits.atn")),
 ];
 
 fn file_with(desc: Descriptor) -> AtnFile {
@@ -55,7 +55,7 @@ fn unicode_metadata_unknown_events_and_dialog_flags_are_preserved() {
     let future = &action.items[1];
     assert_eq!(future.event, AtnEvent::Name("syntheticFutureEvent".into()));
     assert_eq!((future.expanded, future.enabled, future.with_dialog, future.dialog_options), (false, false, true, 255));
-    assert_eq!(future.dictionary, "Future event");
+    assert_eq!(future.dictionary, b"Future event");
     assert!(future.descriptor.is_none());
     assert_eq!(file.actions[1].name, UnicodeString::new_nul("Empty"));
     assert!(file.actions[1].items.is_empty());

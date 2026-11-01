@@ -1,4 +1,4 @@
-//! Shared invariant for the parser contract suite and the actual cargo-fuzz target.
+//! Shared round-trip invariant for the `.atn` parser contract suite.
 use photocraft_psd::atn::{self, AtnFile};
 use photocraft_psd::descriptor::{Descriptor, Value};
 
