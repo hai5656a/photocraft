@@ -945,17 +945,21 @@ fn draw_set_header(ui: &mut egui::Ui, set: &str, count: u64, collapsed: bool, se
 }
 
 /// The sets New Set made that hold no action yet: empty folder rows after the rest. Returns the
-/// set whose row was clicked.
-fn draw_empty_sets(app: &PhotocraftApp, ui: &mut egui::Ui, rows: &[Row], t: &Tokens) -> Option<String> {
-    let mut clicked = None;
+/// set whose row was clicked and the set whose Save Set… was chosen.
+fn draw_empty_sets(app: &PhotocraftApp, ui: &mut egui::Ui, rows: &[Row], t: &Tokens) -> (Option<String>, Option<String>) {
+    let (mut clicked, mut save) = (None, None);
     for set in app.session.actions.sets.iter().filter(|set| !rows.iter().any(|r| r.set.as_ref() == Some(*set))) {
         let selected = app.ui.actions.selected.is_none() && app.ui.actions.selected_set.as_ref() == Some(set);
         let collapsed = app.ui.actions.collapsed_sets.contains(set);
-        if draw_set_header(ui, set, 0, collapsed, selected, t).toggled {
+        let result = draw_set_header(ui, set, 0, collapsed, selected, t);
+        if result.toggled {
             clicked = Some(set.clone());
         }
+        if result.save {
+            save = Some(set.clone());
+        }
     }
-    clicked
+    (clicked, save)
 }
 
 fn action_context_menu(app: &mut PhotocraftApp, response: &egui::Response, index: usize, name: &str, swatch: &str) {
@@ -1170,7 +1174,9 @@ pub fn panel(app: &mut PhotocraftApp, ui: &mut egui::Ui) {
                 dialog_toggled = dialog_toggled.or(events.dialog_toggled);
             }
         }
-        set_toggled = set_toggled.take().or_else(|| draw_empty_sets(app, ui, &rows, &t));
+        let (empty_toggled, empty_save) = draw_empty_sets(app, ui, &rows, &t);
+        set_toggled = set_toggled.take().or(empty_toggled);
+        save_set = save_set.take().or(empty_save);
     });
     if let Some((action, step)) = toggled {
         let _ = app.run("actions.toggle", json!({"action": action, "step": step}));

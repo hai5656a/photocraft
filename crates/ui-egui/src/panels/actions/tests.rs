@@ -933,6 +933,24 @@ fn save_actions_is_enabled_for_a_selected_empty_set_with_no_actions() {
     );
 }
 
+/// CodeRabbit review on #10459: Save Set… in an empty set folder's context menu saves that set,
+/// as it does for a folder with actions.
+#[test]
+fn save_set_on_an_empty_set_folder_opens_the_save_dialog() {
+    use egui_kittest::kittest::Queryable;
+    let (mut h, asked) = empty_set_save_harness("Later");
+    h.get_by_label("Later").click_secondary();
+    h.run_steps(2);
+    h.get_by_label("Save Set…").click();
+    h.run_steps(2);
+    h.state_mut().poll_file_dialog(&egui::Context::default(), None);
+    assert!(
+        matches!(asked.borrow().as_slice(), [crate::file_dialog::FileDialogRequest::Save { suggested }] if suggested == "Later.atn"),
+        "{:?}",
+        asked.borrow()
+    );
+}
+
 #[test]
 fn moving_an_action_next_to_another_set_joins_it() {
     let mut app = PhotocraftApp::new(photocraft_engine::Session::new(), crate::Services::default());
