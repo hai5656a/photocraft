@@ -38,6 +38,16 @@ pub struct ActionsUi {
     renaming: Option<RenameAction>,
 }
 
+impl ActionsUi {
+    /// Select an action (and one of its steps): it replaces a selected set, so a later deselect
+    /// (Delete, a removed row) doesn't bring back a set the user moved away from.
+    fn select(&mut self, action: usize, step: Option<usize>) {
+        self.selected = Some(action);
+        self.selected_step = step;
+        self.selected_set = None;
+    }
+}
+
 #[derive(Clone, Debug, PartialEq)]
 struct RenameAction {
     index: usize,
@@ -87,20 +97,30 @@ fn playback_targets(app: &PhotocraftApp) -> Vec<usize> {
     playback_selection(app).into_iter().collect()
 }
 
-/// Play `targets` one after another, stopping at the first that fails, pauses for a dialog or
-/// can't start. Returns the last result with `ran` counting the steps of all of them, or `None`
-/// when there was nothing to play.
+/// Play `targets` one after another, stopping at the first that fails or can't start. One that
+/// pauses for a step dialog hands the rest to that dialog, which plays them after its OK (Cancel
+/// stops them all, as it stops one action). Returns the last result with `ran` counting the steps
+/// of all of them, or `None` when there was nothing to play.
 fn play_targets(app: &mut PhotocraftApp, targets: &[usize]) -> Result<Option<Value>, String> {
     let (mut last, mut ran) = (None, 0u64);
-    for &i in targets {
+    for (n, &i) in targets.iter().enumerate() {
         let mut v = app.run("actions.play", json!({"action": i}))?;
         ran = ran.saturating_add(v.get("ran").and_then(Value::as_u64).unwrap_or(0));
-        let stop = v.get("failed").is_some_and(Value::is_object) || v.get("paused").is_some_and(Value::is_object);
+        let failed = v.get("failed").is_some_and(Value::is_object);
+        let paused = v.get("paused").filter(|p| p.is_object()).and_then(|p| p.get("dialog")).and_then(Value::as_u64);
         if let Some(o) = v.as_object_mut() {
             o.insert("ran".into(), json!(ran));
         }
         last = Some(v);
-        if stop {
+        if let Some(dialog) = paused.filter(|_| !failed) {
+            let rest = targets.get(n + 1..).unwrap_or_default().to_vec();
+            let token = app.ui.dialog_mut(dialog).and_then(|d| d.fields.get(RESUME)).and_then(Value::as_u64);
+            if let Some(entry) = token.and_then(|t| app.paused_playbacks.paused.get_mut(&t)) {
+                entry.then = rest;
+            }
+            break;
+        }
+        if failed {
             break;
         }
     }
@@ -322,13 +342,12 @@ fn begin_recording(app: &mut PhotocraftApp, append: bool) {
     };
     let Ok(v) = app.run("actions.record", params) else { return };
     let Some(i) = v.get("index").and_then(Value::as_u64).and_then(|n| usize::try_from(n).ok()) else { return };
-    app.ui.actions.selected = Some(i);
-    app.ui.actions.selected_step = None;
+    app.ui.actions.select(i, None);
     if app.ui.actions.expanded.len() <= i {
         app.ui.actions.expanded.resize(i + 1, false);
     }
     app.ui.actions.expanded[i] = true;
-    // Its set too: a click that selected the set's folder row may have collapsed it.
+    // Its set too, in case its folder is collapsed.
     if let Some(set) = app.session.actions.list.get(i).and_then(|a| a.set.as_ref()) {
         app.ui.actions.collapsed_sets.retain(|c| c != set);
     }
@@ -462,8 +481,7 @@ pub fn load_bytes(app: &mut PhotocraftApp, name: &str, bytes: &[u8]) -> Result<V
     if let Some(first) = r["actions"][0].as_str()
         && let Some(i) = list.iter().position(|a| a.name == first)
     {
-        app.ui.actions.selected = Some(i);
-        app.ui.actions.selected_step = None;
+        app.ui.actions.select(i, None);
         app.ui.actions.expanded.resize(list.len(), false);
         if let Some(e) = app.ui.actions.expanded.get_mut(i) {
             *e = true;
@@ -595,8 +613,7 @@ pub fn insert_stop_confirm(app: &mut PhotocraftApp, fields: &serde_json::Map<Str
     });
     let r = app.run("actions.insert", params)?;
     if let (Some(a), Some(step)) = (usize::try_from(action).ok(), r["step"].as_u64().and_then(|s| usize::try_from(s).ok())) {
-        app.ui.actions.selected = Some(a);
-        app.ui.actions.selected_step = Some(step);
+        app.ui.actions.select(a, Some(step));
         app.ui.actions.expanded.resize(app.session.actions.list.len(), false);
         if let Some(e) = app.ui.actions.expanded.get_mut(a) {
             *e = true;
@@ -669,6 +686,8 @@ pub(crate) struct PausedPlayback {
     /// box, automation), which end the call through `resume`, `abandoned` or `stopped`, so the
     /// recording comes back exactly once.
     record: Option<Value>,
+    /// The actions still to play after this one, when Play started a whole set.
+    then: Vec<usize>,
 }
 
 /// The paused playbacks, by the token their dialog carries. The dialog's fields hold only the
@@ -682,7 +701,7 @@ pub(crate) struct PausedPlaybacks {
 impl PausedPlaybacks {
     fn pause(&mut self, action: String, from: usize, gate: Option<Gate>) -> u64 {
         self.last = self.last.wrapping_add(1);
-        self.paused.insert(self.last, PausedPlayback { action, from, gate, record: None });
+        self.paused.insert(self.last, PausedPlayback { action, from, gate, record: None, then: Vec::new() });
         self.last
     }
 
@@ -715,7 +734,31 @@ pub fn resume(app: &mut PhotocraftApp, fields: &serde_json::Map<String, Value>) 
     let params = json!({"action": paused.action, "from": paused.from});
     let saved = app.session.authorize;
     app.session.authorize = paused.gate.or(saved);
-    let played = play_owned(app, &params, owner);
+    let mut played = play_owned(app, &params, owner);
+    // Paused again at a later dialog of the same action: that dialog carries the rest of the set.
+    if let Ok(v) = &played
+        && let Some(dialog) = v.get("paused").and_then(|p| p.get("dialog")).and_then(Value::as_u64)
+        && let Some(token) = app.ui.dialog_mut(dialog).and_then(|d| d.fields.get(RESUME)).and_then(Value::as_u64)
+        && let Some(entry) = app.paused_playbacks.paused.get_mut(&token)
+    {
+        entry.then = paused.then.clone();
+    }
+    // The rest of a set Play started: under the same gate, and only if this action finished.
+    if let Ok(v) = &played
+        && !paused.then.is_empty()
+        && v.get("failed").is_none()
+        && v.get("paused").is_none()
+    {
+        let ran = v.get("ran").and_then(Value::as_u64).unwrap_or(0);
+        played = play_targets(app, &paused.then).map(|rest| {
+            let mut rest = rest.unwrap_or(Value::Null);
+            let total = ran.saturating_add(rest.get("ran").and_then(Value::as_u64).unwrap_or(0));
+            if let Some(o) = rest.as_object_mut() {
+                o.insert("ran".into(), json!(total));
+            }
+            rest
+        });
+    }
     app.session.authorize = saved;
     match played {
         Ok(v) => {
@@ -849,16 +892,14 @@ fn move_row(app: &mut PhotocraftApp, source: DragRow, to: usize) {
         return;
     }
     if source.step.is_some() {
-        app.ui.actions.selected = Some(source.action);
-        app.ui.actions.selected_step = Some(to);
+        app.ui.actions.select(source.action, Some(to));
     } else {
         app.ui.actions.expanded.resize(app.session.actions.list.len(), false);
         if source.action < app.ui.actions.expanded.len() && to < app.ui.actions.expanded.len() {
             let expanded = app.ui.actions.expanded.remove(source.action);
             app.ui.actions.expanded.insert(to, expanded);
         }
-        app.ui.actions.selected = Some(to);
-        app.ui.actions.selected_step = None;
+        app.ui.actions.select(to, None);
         // Dropped among another set's actions: the action joins that set (the row above wins).
         let list = &app.session.actions.list;
         let neighbour = to.checked_sub(1).and_then(|j| list.get(j)).or_else(|| list.get(to + 1)).and_then(|a| a.set.clone());
@@ -953,7 +994,10 @@ fn display_order(rows: &[Row]) -> Vec<usize> {
 }
 
 struct SetHeaderResult {
+    /// A click on the disclosure triangle: collapse or expand, the selection stays.
     toggled: bool,
+    /// A click on the rest of the row: select the set.
+    picked: bool,
     save: bool,
 }
 
@@ -982,7 +1026,10 @@ fn draw_set_header(ui: &mut egui::Ui, set: &str, count: u64, collapsed: bool, se
     ui.painter().text(pos2(rect.left() + 44.0, rect.center().y), Align2::LEFT_CENTER, set, egui::FontId::proportional(12.0), tokens.text);
     let summary = crate::i18n::trn(crate::i18n::current(), count, "{n} action", "{n} actions");
     ui.painter().text(pos2(rect.right() - 8.0, rect.center().y), Align2::RIGHT_CENTER, summary, egui::FontId::proportional(11.0), tokens.text_faint);
-    let toggled = response.clicked();
+    // As on an action row, the triangle's column collapses or expands and the rest of the row
+    // selects; neither does the other's job.
+    let toggled = response.clicked() && response.interact_pointer_pos().is_some_and(|p| p.x < rect.left() + 20.0);
+    let picked = response.clicked() && !toggled;
     let mut save = false;
     response.context_menu(|ui| {
         if ui.button(tl!("Save Set…")).clicked() {
@@ -990,19 +1037,19 @@ fn draw_set_header(ui: &mut egui::Ui, set: &str, count: u64, collapsed: bool, se
             ui.close();
         }
     });
-    SetHeaderResult { toggled, save }
+    SetHeaderResult { toggled, picked, save }
 }
 
 /// The sets New Set made that hold no action yet: empty folder rows after the rest. Returns the
-/// set whose row was clicked and the set whose Save Set… was chosen.
-fn draw_empty_sets(app: &PhotocraftApp, ui: &mut egui::Ui, rows: &[Row], t: &Tokens) -> (Option<String>, Option<String>) {
+/// set whose row was clicked (and whether on its triangle) and the set whose Save Set… was chosen.
+fn draw_empty_sets(app: &PhotocraftApp, ui: &mut egui::Ui, rows: &[Row], t: &Tokens) -> (Option<(String, bool)>, Option<String>) {
     let (mut clicked, mut save) = (None, None);
     for set in app.session.actions.sets.iter().filter(|set| !rows.iter().any(|r| r.set.as_ref() == Some(*set))) {
         let selected = app.ui.actions.selected.is_none() && app.ui.actions.selected_set.as_ref() == Some(set);
         let collapsed = app.ui.actions.collapsed_sets.contains(set);
         let result = draw_set_header(ui, set, 0, collapsed, selected, t);
-        if result.toggled {
-            clicked = Some(set.clone());
+        if result.toggled || result.picked {
+            clicked = Some((set.clone(), result.toggled));
         }
         if result.save {
             save = Some(set.clone());
@@ -1089,7 +1136,7 @@ pub fn panel(app: &mut PhotocraftApp, ui: &mut egui::Ui) {
     let mut renamed = None;
     let mut toggled = None;
     let mut dialog_toggled = None;
-    let mut set_toggled: Option<String> = None;
+    let mut set_toggled: Option<(String, bool)> = None;
     let mut save_set: Option<String> = None;
     let max_h = (ui.available_height() - 38.0).max(0.0);
     let mut play_idx: Option<Vec<usize>> = None;
@@ -1120,8 +1167,8 @@ pub fn panel(app: &mut PhotocraftApp, ui: &mut egui::Ui) {
                 let count = rows.iter().filter(|r| r.set.as_deref() == Some(set)).count() as u64;
                 let selected = app.ui.actions.selected.is_none() && app.ui.actions.selected_set.as_deref() == Some(set);
                 let result = draw_set_header(ui, set, count, collapsed, selected, &t);
-                if result.toggled {
-                    set_toggled = Some(set.to_string());
+                if result.toggled || result.picked {
+                    set_toggled = Some((set.to_string(), result.toggled));
                 }
                 if result.save {
                     save_set = Some(set.to_string());
@@ -1191,11 +1238,7 @@ pub fn panel(app: &mut PhotocraftApp, ui: &mut egui::Ui) {
                 ui.painter().circle_filled(pos2(rect.right() - 64.0, rect.center().y), 4.0, Color32::from_rgb(230, 60, 60));
             }
             if resp.clicked() {
-                app.ui.actions.selected = Some(i);
-                app.ui.actions.selected_step = None;
-                // The action replaces the set as the selection, so a later deselect (Delete)
-                // doesn't bring back a set the user moved away from.
-                app.ui.actions.selected_set = None;
+                app.ui.actions.select(i, None);
                 if button_mode {
                     if !resp.double_clicked() {
                         play_idx = Some(vec![i]);
@@ -1236,17 +1279,21 @@ pub fn panel(app: &mut PhotocraftApp, ui: &mut egui::Ui) {
     if let Some((action, step)) = dialog_toggled {
         let _ = app.run("actions.dialog", json!({"action": action, "step": step}));
     }
-    if let Some(set) = set_toggled {
-        // A click on a set's folder row also selects the set, for New Action.
-        app.ui.actions.selected = None;
-        app.ui.actions.selected_step = None;
-        app.ui.actions.selected_set = Some(set.clone());
-        match app.ui.actions.collapsed_sets.iter().position(|c| *c == set) {
+    match set_toggled {
+        // The disclosure triangle collapses or expands the set and leaves the selection alone.
+        Some((set, true)) => match app.ui.actions.collapsed_sets.iter().position(|c| *c == set) {
             Some(i) => {
                 app.ui.actions.collapsed_sets.remove(i);
             }
             None => app.ui.actions.collapsed_sets.push(set),
+        },
+        // The rest of the folder row selects the set, for New Action and Play.
+        Some((set, false)) => {
+            app.ui.actions.selected = None;
+            app.ui.actions.selected_step = None;
+            app.ui.actions.selected_set = Some(set);
         }
+        None => {}
     }
     if let Some(set) = save_set
         && let Err(e) = save_dialog(app, Some(set))
@@ -1371,8 +1418,7 @@ fn draw_step_rows(app: &mut PhotocraftApp, ui: &mut egui::Ui, context: &StepRows
         } else if dialog.clicked() {
             events.dialog_toggled = Some((context.action, step));
         } else if response.clicked() {
-            app.ui.actions.selected = Some(context.action);
-            app.ui.actions.selected_step = Some(step);
+            app.ui.actions.select(context.action, Some(step));
         }
     }
     events

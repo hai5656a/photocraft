@@ -643,14 +643,12 @@ fn set_folders_group_actions_and_collapse() {
     assert!(h.get_by_label("Sharpen").rect().top() > folder.top());
     assert!(h.get_by_label("Soften").rect().top() > h.get_by_label("Sharpen").rect().top());
     assert_eq!(display_order(&[]), Vec::<usize>::new());
-    // Clicking the folder collapses it; its actions disappear and the state is remembered.
-    h.get_by_label("Retouch").click();
-    h.run_steps(3);
+    // Clicking the folder's triangle collapses it; its actions disappear and the state is remembered.
+    click_set_triangle(&mut h, "Retouch");
     assert_eq!(h.state().ui.actions.collapsed_sets, ["Retouch"]);
     assert!(h.query_by_label("Sharpen").is_none());
     assert!(h.query_by_label("Loose").is_some());
-    h.get_by_label("Retouch").click();
-    h.run_steps(3);
+    click_set_triangle(&mut h, "Retouch");
     assert!(h.state().ui.actions.collapsed_sets.is_empty());
     assert!(h.query_by_label("Sharpen").is_some());
 }
@@ -674,7 +672,19 @@ fn layer_names(app: &PhotocraftApp) -> Vec<String> {
     app.session.active().unwrap().doc.walk().iter().map(|(_, _, l)| l.name.clone()).filter(|n| n != "Background").collect()
 }
 
-/// #10459 fix-up: a click on a set folder (also how a set collapses) selects the set, and Play
+/// Click a set folder row's disclosure triangle (a plain `click()` lands on the row's middle,
+/// which selects the set).
+fn click_set_triangle(h: &mut egui_kittest::Harness<'_, PhotocraftApp>, set: &str) {
+    use egui_kittest::kittest::Queryable;
+    let pos = h.get_by_label(set).rect().left_center() + vec2(12.0, 0.0);
+    h.event(egui::Event::PointerMoved(pos));
+    for pressed in [true, false] {
+        h.event(egui::Event::PointerButton { pos, button: egui::PointerButton::Primary, pressed, modifiers: egui::Modifiers::NONE });
+    }
+    h.run_steps(2);
+}
+
+/// #10459 fix-up: a click on a set folder row (not its triangle) selects the set, and Play
 /// then plays every action of that set in order, as Photoshop plays a selected set, not the first
 /// action of the whole list.
 #[test]
@@ -683,11 +693,9 @@ fn play_with_a_set_folder_selected_plays_that_sets_actions() {
     let mut h = two_set_panel();
     h.get_by_label("Resize").click();
     h.run_steps(2);
-    // Collapse and expand Retouch: the set stays selected.
     h.get_by_label("Retouch").click();
     h.run_steps(2);
-    h.get_by_label("Retouch").click();
-    h.run_steps(2);
+    assert!(h.state().ui.actions.collapsed_sets.is_empty(), "a click on the row selects, it doesn't collapse");
     h.get_by_label("Play selection").click();
     h.run_steps(2);
     let mut names = layer_names(h.state());
@@ -732,6 +740,100 @@ fn play_with_an_action_selected_plays_only_that_action() {
     h.get_by_label("Delete").click();
     h.run_steps(2);
     assert_eq!((h.state().ui.actions.selected, h.state().ui.actions.selected_set.as_deref()), (None, None));
+}
+
+/// #10459 fix-up: the disclosure triangle collapses and expands a set and leaves the selection
+/// alone, so Play still plays the selected action, not the set that was looked into.
+#[test]
+fn collapsing_a_set_keeps_the_selected_action_for_play() {
+    use egui_kittest::kittest::Queryable;
+    let mut h = two_set_panel();
+    h.get_by_label("Resize").click();
+    h.run_steps(2);
+    click_set_triangle(&mut h, "Retouch");
+    assert_eq!(h.state().ui.actions.collapsed_sets, ["Retouch"]);
+    assert!(h.query_by_label("Sharpen").is_none());
+    click_set_triangle(&mut h, "Retouch");
+    assert!(h.state().ui.actions.collapsed_sets.is_empty());
+    assert_eq!((h.state().ui.actions.selected, h.state().ui.actions.selected_set.as_deref()), (Some(0), None));
+    h.get_by_label("Play selection").click();
+    h.run_steps(2);
+    assert_eq!(layer_names(h.state()), ["w"]);
+}
+
+/// #10459 fix-up: selecting a step (or any other way an action becomes the selection) drops a
+/// selected set, so deleting that step doesn't bring the set back as Play's target.
+#[test]
+fn a_selected_step_replaces_the_selected_set() {
+    use egui_kittest::kittest::Queryable;
+    let mut h = two_set_panel();
+    h.state_mut().session.actions.list[0].steps.push(("select.all".into(), json!({})));
+    h.state_mut().ui.actions.expanded = vec![true, false, false];
+    h.run_steps(2);
+    h.get_by_label("Retouch").click();
+    h.run_steps(2);
+    assert_eq!(h.state().ui.actions.selected_set.as_deref(), Some("Retouch"));
+    h.get_by_label(&label_of("select.all")).click();
+    h.run_steps(2);
+    assert_eq!((h.state().ui.actions.selected, h.state().ui.actions.selected_step), (Some(0), Some(1)));
+    h.get_by_label("Delete").click();
+    h.run_steps(2);
+    assert_eq!(h.state().session.actions.list[0].steps.len(), 1, "the step went");
+    assert_eq!((h.state().ui.actions.selected, h.state().ui.actions.selected_set.as_deref()), (None, None));
+    h.get_by_label("Play selection").click();
+    h.run_steps(2);
+    assert_eq!(layer_names(h.state()), ["w"], "the first action, not the Retouch set");
+}
+
+/// #10459 fix-up: a set whose first action pauses at step dialogs plays the rest of the set
+/// after OK, and Cancel stops the whole set, as it stops one action.
+#[test]
+fn a_set_paused_at_a_step_dialog_plays_its_other_actions_after_ok() {
+    use egui_kittest::kittest::Queryable;
+    for ok in [true, false] {
+        let mut app = PhotocraftApp::new(photocraft_engine::Session::new(), crate::Services::default());
+        app.run("file.new", json!({"width": 8, "height": 8})).unwrap();
+        let mut a = Action::new(
+            "A",
+            vec![
+                ("layer.new.layer".into(), json!({"name": "a"})),
+                ("filter.blur.gaussianBlur".into(), json!({"radius": 1})),
+                ("filter.blur.gaussianBlur".into(), json!({"radius": 2})),
+                ("layer.new.layer".into(), json!({"name": "a2"})),
+            ],
+        );
+        a.set = Some("S".into());
+        a.dialogs.extend([1, 2]);
+        let mut b = Action::new("B", vec![("layer.new.layer".into(), json!({"name": "b"}))]);
+        b.set = Some("S".into());
+        app.session.actions.list.extend([a, b]);
+        let mut h = egui_kittest::Harness::builder().with_size(vec2(360.0, 400.0)).build_ui_state(|ui, app| panel(app, ui), app);
+        h.run_steps(2);
+        h.get_by_label("S").click();
+        h.run_steps(2);
+        h.get_by_label("Play selection").click();
+        h.run_steps(2);
+        assert_eq!(layer_names(h.state()), ["a"]);
+        assert!(h.state().ui.status.contains("dialog"), "{}", h.state().ui.status);
+        let first = h.state().ui.dialogs.last().map(|d| d.id).expect("the first blur's dialog");
+        if !ok {
+            crate::dialogs::cancel(h.state_mut(), first).unwrap();
+            h.run_steps(2);
+            assert_eq!(layer_names(h.state()), ["a"], "Cancel stops the set");
+            continue;
+        }
+        crate::dialogs::confirm(h.state_mut(), first).unwrap();
+        h.run_steps(2);
+        // The second dialog of A pauses again; the rest of the set waits behind it.
+        let second = h.state().ui.dialogs.last().map(|d| d.id).expect("the second blur's dialog");
+        assert_ne!(first, second);
+        crate::dialogs::confirm(h.state_mut(), second).unwrap();
+        h.run_steps(2);
+        let mut names = layer_names(h.state());
+        names.sort();
+        assert_eq!(names, ["a", "a2", "b"], "B played after A's dialogs");
+        assert!(h.state().ui.status.starts_with("Played"), "{}", h.state().ui.status);
+    }
 }
 
 /// #7535: the folder button (and the panel menu's New Set…) names an empty set, shown as a folder
@@ -870,8 +972,8 @@ fn start_recording_with_a_set_selected_records_a_new_action_into_it() {
     assert_eq!(list[1].set.as_deref(), Some("Web"));
 }
 
-/// A click on an expanded set's folder row selects it and collapses it; recording into it (New
-/// Action or Start Recording) expands the set again, so the new action and its steps show.
+/// Recording into a collapsed, selected set (New Action or Start Recording) expands the set
+/// again, so the new action and its steps show.
 #[test]
 fn recording_into_a_collapsed_set_expands_it() {
     use egui_kittest::{Harness, kittest::Queryable};
@@ -889,6 +991,7 @@ fn recording_into_a_collapsed_set_expands_it() {
             app,
         );
         h.run_steps(2);
+        click_set_triangle(&mut h, "Retouch");
         h.get_by_label("Retouch").click();
         h.run_steps(2);
         assert_eq!(h.state().ui.actions.collapsed_sets, ["Retouch"], "{label}");
