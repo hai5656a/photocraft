@@ -304,15 +304,37 @@ fn camera_raw_range(key: &str) -> std::ops::RangeInclusive<f64> {
     }
 }
 
+/// The hidden param an imported Camera Raw Filter step keeps its recorded descriptor in, so
+/// Save Actions writes the step back unchanged while its settings are the ones it imported with.
+const CAMERA_RAW_DESCRIPTOR: &str = "__atnDescriptor";
+
+/// The colour grading wheels' keys, the tone curve splits and the vignette style.
+const CAMERA_RAW_GRADES: &[&str] =
+    &["STSH", "STSS", "CgSL", "CgMH", "CgMS", "CgML", "STHH", "STHS", "CgHL", "CgGH", "CgGS", "CgGL", "PC_1", "PC_2", "PC_3", "PCVS"];
+
 /// A recorded Camera Raw Filter step (`Adobe Camera Raw Filter`) as `filter.cameraRaw` (#6745).
 /// Settings the command has no counterpart for refuse the step rather than replaying a different
-/// look: the Calibration panel, a white balance other than Custom, and the controls the PSD
-/// mapping keeps only at their neutral values. Version metadata and a full settings snapshot's
-/// lens and geometry keys are ignored, as other events ignore keys they don't map.
+/// look: the Calibration panel, a white balance other than Custom, the controls the PSD mapping
+/// keeps only at their neutral values, and any key outside this table (lens, geometry, profile,
+/// masks…), as the PSD mapping's `known_key` does.
 pub(super) fn camera_raw_from(d: &Descriptor) -> Mapped {
     const CALIBRATION: &[&str] = &["RHue", "RSat", "GHue", "GSat", "BHue", "BSat", "BlkB"];
     const NEUTRAL_ONLY: &[(&str, f64)] =
         &[("LNRC", 0.0), ("CNRS", 50.0), ("MDis", 0.0), ("VigA", 0.0), ("VigM", 50.0), ("crfs", 100.0), ("TMMs", 0.0), ("PGTM", 0.0), ("RGBt", 0.0)];
+    const OTHER: &[&str] = &["CrVe", "PrVe", "PrVN", "WBal", "Crv ", "CrvR", "CrvG", "CrvB"];
+    let known = |k: &str| {
+        (k.len() == 4 && ["HA_", "SA_", "LA_"].iter().any(|p| k.starts_with(p)) && ["R", "O", "Y", "G", "A", "B", "P", "M"].iter().any(|c| k.ends_with(c)))
+            || CAMERA_RAW.iter().any(|F(f, ..)| *f == k)
+            || CAMERA_RAW_GRADES.contains(&k)
+            || OTHER.contains(&k)
+            || CALIBRATION.contains(&k)
+            || NEUTRAL_ONLY.iter().any(|(n, _)| *n == k)
+    };
+    // An empty step (no descriptor) would play as a no-op, and a key the table doesn't know may
+    // be active processing (lens, geometry, profile, masks) that playback would leave out.
+    if d.items.is_empty() || d.items.iter().any(|(k, _)| !std::str::from_utf8(k.as_bytes()).is_ok_and(known)) {
+        return Mapped::Unsupported { harmless: false };
+    }
     let active = |k: &str, neutral: f64| d.get(k).is_some() && get_num(d, k) != Some(neutral);
     let custom_wb = d.get("WBal").is_none() || get_enum(d, "WBal").as_deref() == Some("Cst");
     if !custom_wb || CALIBRATION.iter().any(|k| active(k, 0.0)) || NEUTRAL_ONLY.iter().any(|(k, n)| active(k, *n)) {
@@ -327,8 +349,7 @@ pub(super) fn camera_raw_from(d: &Descriptor) -> Mapped {
         (Some(_), Some(v)) => k != "PCVS" && !(v.is_finite() && camera_raw_range(k).contains(&v)),
     };
     let grouped = ["HA_", "SA_", "LA_"].iter().flat_map(|p| ["R", "O", "Y", "G", "A", "B", "P", "M"].map(|c| format!("{p}{c}")));
-    let grades = ["STSH", "STSS", "CgSL", "CgMH", "CgMS", "CgML", "STHH", "STHS", "CgHL", "CgGH", "CgGS", "CgGL", "PC_1", "PC_2", "PC_3", "PCVS"];
-    if CAMERA_RAW.iter().any(|F(k, ..)| unreadable(k)) || grouped.into_iter().any(|k| unreadable(&k)) || grades.iter().any(|k| unreadable(k)) {
+    if CAMERA_RAW.iter().any(|F(k, ..)| unreadable(k)) || grouped.into_iter().any(|k| unreadable(&k)) || CAMERA_RAW_GRADES.iter().any(|k| unreadable(k)) {
         return Mapped::Unsupported { harmless: false };
     }
     let Some(mut m) = fields_from(d, CAMERA_RAW) else { return Mapped::Unsupported { harmless: false } };
@@ -390,7 +411,23 @@ pub(super) fn camera_raw_from(d: &Descriptor) -> Mapped {
             m.insert(param.into(), Value::Array(flat.as_chunks::<2>().0.iter().map(|[a, b]| json!([a, b])).collect()));
         }
     }
+    m.insert(CAMERA_RAW_DESCRIPTOR.into(), json!(photocraft_paint::tile::b64_encode(&d.to_bytes())));
     step(crate::lens_cmds::RAW, Value::Object(m))
+}
+
+/// An imported Camera Raw Filter step back as its recorded descriptor, unchanged. Only while the
+/// params are still what that descriptor imports as: an edited step, or one PhotoCraft recorded,
+/// has no verified Photoshop form and Save Actions refuses it.
+pub(super) fn camera_raw_to(_: &str, p: &Value) -> Option<Descriptor> {
+    let d = Descriptor::from_bytes(&photocraft_paint::tile::b64_decode(jstr(p, CAMERA_RAW_DESCRIPTOR)?)?).ok()?;
+    let Mapped::Steps(steps) = camera_raw_from(&d) else { return None };
+    let [(_, imported)] = steps.as_slice() else { return None };
+    let (mut a, mut b) = (imported.clone(), p.clone());
+    for v in [&mut a, &mut b] {
+        super::convert::normalise(v);
+        v.as_object_mut()?.remove(CAMERA_RAW_DESCRIPTOR);
+    }
+    (a == b).then_some(d)
 }
 
 /// Whether a Select and Mask step carries Refine Edge Brush strokes or the workspace's tool
