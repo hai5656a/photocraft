@@ -683,6 +683,46 @@ mod tests {
     }
 
     #[test]
+    fn mac_roman_bullets_stay_mac_roman() {
+        // Mac Roman • (0xA5) is windows-1252 ¥, which must not count for windows-1252.
+        for (set, bytes, text) in [
+            ("Größe ändern", &b"Ebene \xa5 Kopie"[..], "Ebene • Kopie"),
+            ("Définir", b"Niveaux \xa5 Courbes", "Niveaux • Courbes"),
+            ("Tamaño de imagen", b"Tama\x96o \xa5 50%", "Tamaño • 50%"),
+        ] {
+            let f = parse(&one_action(set, "Aktion 1", vec![bare(AtnEvent::name("x"), bytes)])).unwrap();
+            assert_eq!((f.encoding.as_deref(), labels(&f)), (Some("macintosh"), vec![text.to_string()]));
+        }
+    }
+
+    #[test]
+    fn latin_words_do_not_read_as_cyrillic() {
+        // windows-1251 has І і (0xB2 0xB3) and д (0xE4) where windows-1252 has ² ³ ä: a letter
+        // glued to a Latin word is read as Latin.
+        for (bytes, text) in [(&b"Fl\xe4che m\xb2"[..], "Fläche m²"), (b"Volumen m\xb3", "Volumen m³"), (b"Gr\xf6\xdfe \xb2", "Größe ²")] {
+            let f = parse(&one_action("Größe ändern", "Aktion 1", vec![bare(AtnEvent::name("x"), bytes)])).unwrap();
+            assert_eq!((f.encoding.as_deref(), labels(&f)), (Some("windows-1252"), vec![text.to_string()]));
+        }
+        // Real windows-1251 names still read as Cyrillic, alone, as a set, and beside Latin.
+        let words: [&[u8]; 4] = [
+            b"\xcd\xee\xe2\xfb\xe9 \xf1\xeb\xee\xe9",
+            b"\xd0\xe0\xe7\xec\xe5\xf0 \xe8\xe7\xee\xe1\xf0\xe0\xe6\xe5\xed\xe8\xff",
+            b"\xca\xee\xef\xe8\xff \xf1\xeb\xee\xff 2",
+            b"\xca\xe0\xed\xe0\xeb RGB",
+        ];
+        let text = ["Новый слой", "Размер изображения", "Копия слоя 2", "Канал RGB"];
+        for (bytes, text) in words.iter().zip(text) {
+            let f = parse(&one_action("Набор 1", "Операция 1", vec![bare(AtnEvent::name("x"), bytes)])).unwrap();
+            assert_eq!((f.encoding.as_deref(), labels(&f)), (Some("windows-1251"), vec![text.to_string()]));
+            assert!(f.warnings.is_empty(), "{:?}", f.warnings);
+        }
+        let items = words.iter().map(|w| bare(AtnEvent::name("x"), w)).collect();
+        let f = parse(&one_action("Набор 1", "Операция 1", items)).unwrap();
+        assert_eq!(f.encoding.as_deref(), Some("windows-1251"));
+        assert_eq!(labels(&f), text);
+    }
+
+    #[test]
     fn known_names_alone_never_warn() {
         // Nothing decodes to the Unicode name, but nothing is shown from the bytes either.
         let f = parse(&one_action("Set 1", "Action 1", vec![known(b"\x80\xff\x80", "Something")])).unwrap();
