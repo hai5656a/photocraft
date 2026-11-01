@@ -693,6 +693,74 @@ fn new_set_makes_an_empty_folder_that_new_action_records_into() {
     assert_eq!(h.state().session.actions.list[2].set.as_deref(), Some("Retouch"));
 }
 
+/// FredApps review on #10459: with no action and no set selected, New Action makes an action
+/// outside every set, even when sets (empty ones included) exist.
+#[test]
+fn new_action_with_no_set_selected_is_in_no_set() {
+    use egui_kittest::{Harness, kittest::Queryable};
+    let mut app = PhotocraftApp::new(photocraft_engine::Session::new(), crate::Services::default());
+    app.run("file.new", json!({"width": 8, "height": 8})).unwrap();
+    let mut retouch = Action::new("Sharpen", vec![]);
+    retouch.set = Some("Retouch".into());
+    app.session.actions.list.push(retouch);
+    app.run("actions.newSet", json!({"name": "Web"})).unwrap();
+    let mut h = Harness::builder().with_size(vec2(360.0, 400.0)).build_ui_state(|ui, app| panel(app, ui), app);
+    h.run_steps(2);
+    assert_eq!((h.state().ui.actions.selected, h.state().ui.actions.selected_set.as_deref()), (None, None));
+    h.get_by_label("Create new action").click();
+    h.run_steps(2);
+    h.state_mut().run("actions.stop", json!({})).unwrap();
+    let list = &h.state().session.actions.list;
+    assert_eq!((list.len(), list[1].name.as_str(), list[1].set.as_deref()), (2, "Action 2", None));
+}
+
+/// FredApps review on #10459: closing the Actions panel and opening it again keeps the selected
+/// set and the empty sets New Set made, so New Action still records into the selected one.
+#[test]
+fn reopening_the_actions_panel_keeps_the_selected_set_and_empty_sets() {
+    use egui_kittest::{Harness, kittest::Queryable};
+    let mut app = PhotocraftApp::new(photocraft_engine::Session::new(), crate::Services::default());
+    app.run("file.new", json!({"width": 8, "height": 8})).unwrap();
+    let mut retouch = Action::new("Sharpen", vec![]);
+    retouch.set = Some("Retouch".into());
+    app.session.actions.list.push(retouch);
+    app.run("actions.newSet", json!({"name": "Web"})).unwrap();
+    app.run("actions.newSet", json!({"name": "Print"})).unwrap();
+    let mut h = Harness::builder().with_size(vec2(360.0, 400.0)).build_ui_state(
+        |ui, app| {
+            // The Actions panel is the History group's second tab.
+            if app.ui.panels.history && app.ui.dock_tabs.history == 1 {
+                panel(app, ui);
+            }
+        },
+        app,
+    );
+    let ctx = h.ctx.clone();
+    let toggle = |h: &mut Harness<'_, PhotocraftApp>| {
+        crate::menus::invoke(h.state_mut(), &ctx, "window.panel.actions", json!({})).unwrap();
+        h.run_steps(2);
+    };
+    if !(h.state().ui.panels.history && h.state().ui.dock_tabs.history == 1) {
+        toggle(&mut h);
+    }
+    h.run_steps(2);
+    h.get_by_label("Web").click();
+    h.run_steps(2);
+    assert_eq!(h.state().ui.actions.selected_set.as_deref(), Some("Web"));
+    toggle(&mut h);
+    assert!(!h.state().ui.panels.history, "closed");
+    assert!(h.query_by_label("Web").is_none());
+    toggle(&mut h);
+    assert!(h.state().ui.panels.history && h.state().ui.dock_tabs.history == 1, "open again");
+    assert!(h.query_by_label("Web").is_some() && h.query_by_label("Print").is_some(), "the empty sets");
+    assert_eq!(h.state().session.actions.sets, ["Web", "Print"]);
+    assert_eq!((h.state().ui.actions.selected, h.state().ui.actions.selected_set.as_deref()), (None, Some("Web")));
+    h.get_by_label("Create new action").click();
+    h.run_steps(2);
+    h.state_mut().run("actions.stop", json!({})).unwrap();
+    assert_eq!(h.state().session.actions.list[1].set.as_deref(), Some("Web"));
+}
+
 /// #7535: with a set's folder row selected and no action, Start Recording (like the Record button)
 /// has no action to append to, so it records a new action into that set, as New Action does.
 #[test]
