@@ -90,6 +90,9 @@ pub(super) fn save(s: &mut Session, p: &Value) -> Result<Value> {
     };
     let set_param = match p.get("set") {
         None | Some(Value::Null) => None,
+        // A set is found by its exact name, as `actions.record` finds it: one loaded from a
+        // Photoshop file or an older actions.json may have surrounding spaces. Others are trimmed.
+        Some(Value::String(n)) if crate::actions_edit_cmds::set_names(s).contains(n) => Some(n.clone()),
         Some(Value::String(n)) if !n.trim().is_empty() => Some(n.trim().to_string()),
         Some(_) => return Err(bad(cmd, "`set` must be a non-empty string")),
     };

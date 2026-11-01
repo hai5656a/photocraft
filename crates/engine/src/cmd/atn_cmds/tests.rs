@@ -3173,3 +3173,23 @@ fn long_names_are_clipped_instead_of_copied_into_every_diagnostic() {
     assert_eq!(imp.unsupported.len(), 50);
     assert!(imp.unsupported.iter().all(|u| u.action.chars().count() == MAX_NAME_CHARS));
 }
+
+/// FredApps review on #10459: a set whose name has surrounding spaces (a Photoshop `.atn` or an
+/// older actions.json can have one, and New Action records into it under that exact name) saves
+/// by that name. `actions.save` used to trim it and then find no set.
+#[test]
+fn save_finds_a_set_by_its_exact_name_with_spaces() {
+    let mut s = Session::new();
+    s.actions.list.push(Action { set: Some(" Web ".into()), ..Action::new("Old", Vec::new()) });
+    s.execute("actions.record", json!({"name": "New", "set": " Web "})).unwrap();
+    s.execute("actions.stop", json!({})).unwrap();
+    let saved = s.execute("actions.save", json!({"set": " Web "})).unwrap();
+    assert_eq!((&saved["set"], &saved["actions"]), (&json!(" Web "), &json!(["Old", "New"])));
+    // The file keeps the name, as Photoshop's does.
+    let mut reloaded = Session::new();
+    let r = reloaded.execute("actions.load", json!({"data": saved["data"]})).unwrap();
+    assert_eq!(r["set"], " Web ");
+    // Other names are still trimmed.
+    s.execute("actions.assignSet", json!({"action": "Old", "set": "Print"})).unwrap();
+    assert_eq!(s.execute("actions.save", json!({"set": "  Print "})).unwrap()["set"], "Print");
+}
