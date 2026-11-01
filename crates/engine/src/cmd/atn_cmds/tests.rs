@@ -3213,6 +3213,30 @@ fn load_decodes_legacy_step_names() {
 }
 
 #[test]
+fn load_keeps_windows_1252_symbols() {
+    // Windows Photoshop step names with no Unicode copy: ® and » are letters in Mac Roman, which
+    // must not win ("Logo Æ", "Grˆﬂe ª"). Save Actions writes the names back as that text.
+    let steps = vec![
+        AtnItem { dictionary: b"Logo \xae".to_vec(), ..item("syntheticFill", "", None) },
+        AtnItem { dictionary: b"Gr\xf6\xdfe \xbb".to_vec(), ..item("syntheticFill", "", None) },
+    ];
+    let file = AtnFile {
+        name: UnicodeString::new_nul("Größe ändern"),
+        actions: vec![AtnAction { name: UnicodeString::new_nul("Logo"), items: steps, ..Default::default() }],
+        ..Default::default()
+    };
+    let mut s = Session::new();
+    let r = s.execute("actions.load", json!({"data": b64(&atn::write(&file).unwrap())})).unwrap();
+    assert_eq!(r["encoding"], "windows-1252", "{r}");
+    assert_eq!(r["unsupported"][0]["name"], "Logo ®", "{r}");
+    assert_eq!(r["unsupported"][1]["name"], "Größe »", "{r}");
+    let saved = s.execute("actions.save", json!({"set": "Größe ändern"})).unwrap();
+    let saved = atn::parse(&photocraft_paint::tile::b64_decode(saved["data"].as_str().unwrap()).unwrap()).unwrap();
+    let names: Vec<String> = saved.actions[0].items.iter().map(|i| saved.item_label(i)).collect();
+    assert_eq!(names, ["Logo ®", "Größe »"]);
+}
+
+#[test]
 fn load_encoding_override() {
     let mut s = Session::new();
     let r = s.execute("actions.load", json!({"data": b64(&gbk_set()), "encoding": "shift_jis"})).unwrap();

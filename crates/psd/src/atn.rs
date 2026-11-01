@@ -643,6 +643,24 @@ mod tests {
     }
 
     #[test]
+    fn latin1_symbol_names_read_as_windows_1252() {
+        // Windows Photoshop "Logo ®" and "Größe »" with no Unicode copy: Mac Roman reads these
+        // bytes as letters ("Logo Æ", "Grˆﬂe ª"), but they are windows-1252, as before #6743.
+        let f = parse(&one_action("Set 1", "Action 1", vec![bare(AtnEvent::name("x"), b"Logo \xae")])).unwrap();
+        assert_eq!(f.encoding.as_deref(), Some("windows-1252"));
+        assert_eq!(labels(&f), ["Logo ®"]);
+        let f = parse(&one_action("Größe ändern", "Aktion", vec![bare(AtnEvent::name("x"), b"Gr\xf6\xdfe \xbb")])).unwrap();
+        assert_eq!(f.encoding.as_deref(), Some("windows-1252"));
+        assert_eq!(labels(&f), ["Größe »"]);
+        assert!(f.warnings.is_empty(), "{:?}", f.warnings);
+        // Mac Roman bytes that windows-1252 reads as controls or rare letters stay Mac Roman.
+        let f =
+            parse(&one_action("Définir", "Action 1", vec![bare(AtnEvent::name("x"), b"Gr\x9a\xa7e"), bare(AtnEvent::name("y"), b"Arri\x8fre-plan")])).unwrap();
+        assert_eq!(f.encoding.as_deref(), Some("macintosh"));
+        assert_eq!(labels(&f), ["Größe", "Arrière-plan"]);
+    }
+
+    #[test]
     fn known_names_alone_never_warn() {
         // Nothing decodes to the Unicode name, but nothing is shown from the bytes either.
         let f = parse(&one_action("Set 1", "Action 1", vec![known(b"\x80\xff\x80", "Something")])).unwrap();

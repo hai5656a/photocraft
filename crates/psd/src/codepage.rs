@@ -16,6 +16,9 @@
 //!    fine): kana → Shift_JIS; Hangul → EUC-KR; Cyrillic → windows-1251; Han → GBK, then
 //!    Big5, then Shift_JIS; Latin letters → windows-1252, then Mac Roman.
 //! 4. Still tied: windows-1252, flagged [`Guess::uncertain`].
+//! 5. Mac Roman must also beat windows-1252 when Latin-1's symbols (© ® ° § « » ± ½…) count
+//!    as common text, as Mac Roman's letters sit on those bytes (1252 "Logo ®" is Mac Roman
+//!    "Logo Æ"). Otherwise the names are windows-1252, with step 3's hint and step 4's warning.
 //!
 //! Only the first [`GUESS_SAMPLE`] bytes of names are examined.
 
@@ -89,12 +92,32 @@ pub(crate) fn guess(legacy: &[&[u8]], hint: &str) -> Guess {
             best.push(enc);
         }
     }
-    match best.as_slice() {
+    let picked = match best.as_slice() {
         [only] => Guess { encoding: only, uncertain: false },
         tied => match hinted(hint).iter().find(|enc| tied.contains(enc)) {
             Some(enc) => Guess { encoding: enc, uncertain: false },
             None => Guess { encoding: WINDOWS_1252, uncertain: true },
         },
+    };
+    if picked.encoding != MACINTOSH {
+        return picked;
+    }
+    // windows-1252 maps every byte, so it is always a survivor here.
+    let latin = |enc| {
+        sample.iter().fold((0u64, 0u64), |(c, h), (name, _)| {
+            let (nc, nh) = single_byte_score(enc, name, is_latin_common);
+            (c.saturating_add(nc), h.saturating_add(nh))
+        })
+    };
+    let (windows, mac) = (latin(WINDOWS_1252), latin(MACINTOSH));
+    let lhs = u128::from(windows.0) * u128::from(mac.1.max(1));
+    let rhs = u128::from(mac.0) * u128::from(windows.1.max(1));
+    if lhs < rhs {
+        picked
+    } else if lhs > rhs || hinted(hint).contains(&WINDOWS_1252) {
+        Guess { encoding: WINDOWS_1252, uncertain: false }
+    } else {
+        Guess { encoding: WINDOWS_1252, uncertain: true }
     }
 }
 
@@ -171,10 +194,9 @@ fn decodes_cleanly(enc: &'static Encoding, bytes: &[u8], truncated: bool) -> boo
 /// many non-ASCII bytes it has.
 fn score(enc: &'static Encoding, name: &[u8]) -> (u64, u64) {
     if enc == WINDOWS_1252 || enc == WINDOWS_1251 || enc == MACINTOSH {
-        // One byte is one character, and a non-ASCII byte is a non-ASCII character. Letters and
-        // typographic punctuation are common, as the double-byte pages' punctuation rows are.
-        let common = |ch: char| ch.is_alphabetic() || TYPOGRAPHIC.contains(&ch);
-        return decode(name, enc).chars().filter(|c| !c.is_ascii()).fold((0, 0), |(c, h), ch| (c + u64::from(common(ch)), h + 1));
+        // Letters and typographic punctuation are common, as the double-byte pages' punctuation
+        // rows are.
+        return single_byte_score(enc, name, |ch| ch.is_alphabetic() || TYPOGRAPHIC.contains(&ch));
     }
     let (mut common, mut high) = (0u64, 0u64);
     let mut i = 0usize;
@@ -205,6 +227,23 @@ fn score(enc: &'static Encoding, name: &[u8]) -> (u64, u64) {
     }
     (common, high)
 }
+
+/// [`score`] for a single-byte page, where one byte is one character and a non-ASCII byte is a
+/// non-ASCII character: `common` decides which of them count.
+fn single_byte_score(enc: &'static Encoding, name: &[u8], common: impl Fn(char) -> bool) -> (u64, u64) {
+    decode(name, enc).chars().filter(|c| !c.is_ascii()).fold((0, 0), |(c, h), ch| (c.saturating_add(u64::from(common(ch))), h.saturating_add(1)))
+}
+
+/// Whether `ch` is common in Western names, for weighing windows-1252 against Mac Roman: letters
+/// (but not those windows-1252 has only at 0x80–0x9F, where Mac Roman keeps its accented
+/// lowercase: Mac "Größe" is 1252 "Grš§e"), typographic punctuation and [`LATIN_SYMBOLS`].
+fn is_latin_common(ch: char) -> bool {
+    (ch.is_alphabetic() && !['Š', 'š', 'Ž', 'ž', 'Œ', 'œ', 'Ÿ', 'ƒ', 'ˆ'].contains(&ch)) || TYPOGRAPHIC.contains(&ch) || LATIN_SYMBOLS.contains(&ch)
+}
+
+/// Latin-1 symbols people type in names (windows-1252 0xA1–0xF7). Not € or ™: windows-1252 has
+/// them at 0x80 and 0x99, Mac Roman's Ä and ô.
+const LATIN_SYMBOLS: [char; 20] = ['¡', '¢', '£', '¥', '§', '©', '«', '®', '°', '±', '²', '³', '¶', '·', '¹', '»', '¼', '½', '¾', '¿'];
 
 /// Quotes, dashes, ellipsis and bullet: windows-1252 and windows-1251 share them at 0x82–0x97;
 /// Mac Roman has them too.
@@ -355,6 +394,31 @@ mod tests {
         assert!(!reads_as_common("Weiß".as_bytes(), WINDOWS_1252));
         assert!(!reads_as_common("Привет".as_bytes(), WINDOWS_1251));
         assert!(!reads_as_common("Weiß".as_bytes(), MACINTOSH));
+    }
+
+    #[test]
+    fn latin1_symbols_read_as_1252_not_mac_roman() {
+        // Mac Roman has letters where windows-1252 has © ® « » §: 1252 "Logo ®" is Mac Roman
+        // "Logo Æ", "Größe »" is "Grˆﬂe ª". Latin-1 (what a code-page-blind reader shows) wins.
+        let logo: &[&[u8]] = &[b"Logo \xae"];
+        assert_eq!(guess(logo, "Set 1"), Guess { encoding: WINDOWS_1252, uncertain: true });
+        assert_eq!(guess(logo, "Größe ändern"), Guess { encoding: WINDOWS_1252, uncertain: false });
+        assert_eq!(decode(logo[0], WINDOWS_1252), "Logo ®");
+        for words in [&["Größe »"][..], &["Contraste « auto »", "§ 3 Größe", "½ Größe", "Teinte ¾ ©"]] {
+            let g = guess_words(WINDOWS_1252, words, "Größe ändern");
+            assert_eq!(g, Guess { encoding: WINDOWS_1252, uncertain: false }, "{words:?}");
+            assert_eq!(guess_words(WINDOWS_1252, words, "Set 1").encoding, WINDOWS_1252, "{words:?}");
+        }
+    }
+
+    #[test]
+    fn mac_roman_letters_still_read_as_mac_roman() {
+        // Mac Roman "Größe" is 1252 "Grš§e", "Ändern" "€ndern", "Contrôle" "Contr™le": Mac Roman
+        // still wins once § counts as common text in windows-1252.
+        for word in ["Größe", "Ändern", "Contrôle"] {
+            let g = guess_words(MACINTOSH, &[word], "Définir l’arrière-plan");
+            assert_eq!(g, Guess { encoding: MACINTOSH, uncertain: false }, "{word}");
+        }
     }
 
     #[test]
