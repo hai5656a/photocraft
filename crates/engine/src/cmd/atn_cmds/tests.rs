@@ -659,6 +659,7 @@ fn every_mapped_command_exports_and_imports_back() {
         ("select.loadSelection", json!({"channel": "targeted"})),
         ("layer.newFillLayer.pattern", json!({"pattern": "Debaser-Distressed-Dark", "scale": 50, "angle": 0, "link": true})),
         ("layer.fill.pattern.set", json!({"pattern": "1 -R2.jpg"})),
+        ("layer.newFillLayer.pattern", json!({"pattern": "b7a3c1d2-0000-4000-8000-000000000001", "patternName": "Twin", "scale": 50})),
         ("image.mode.bitmap", json!({"method": "threshold"})),
         ("image.imageSize", json!({"resolution": 1200, "resample": "preserveDetails", "keepPrintSize": true})),
         ("layer.new.layerFromBackground", json!({"ifPresent": true, "select": false})),
@@ -3509,4 +3510,111 @@ fn long_names_are_clipped_instead_of_copied_into_every_diagnostic() {
     assert_eq!(imp.actions[0].set.as_deref().map(|s| s.chars().count()), Some(MAX_NAME_CHARS));
     assert_eq!(imp.unsupported.len(), 50);
     assert!(imp.unsupported.iter().all(|u| u.action.chars().count() == MAX_NAME_CHARS));
+}
+
+/// A Pattern Fill step whose `Ptrn` holds `id` and `name`, as the reference application records it.
+fn pattern_fill_step(id: &str, name: &str) -> AtnItem {
+    let t = desc("patternLayer").with("Ptrn", D::Descriptor(desc("Ptrn").with("Idnt", text(id)).with("Nm  ", text(name))));
+    item(
+        "Mk  ",
+        "Make",
+        Some(desc("null").with("null", class_ref("contentLayer")).with("Usng", D::Descriptor(desc("contentLayer").with("Type", D::Descriptor(t))))),
+    )
+}
+
+/// Defines a 4×4 pattern of `color` named `name` in `s`'s library from its active document.
+fn define_pattern(s: &mut Session, color: &str, name: &str) -> String {
+    s.execute("edit.fill", json!({"contents": "color", "color": color})).unwrap();
+    s.execute("edit.definePattern", json!({"name": name})).unwrap()["pattern"].as_str().unwrap().to_string()
+}
+
+fn pixel(s: &mut Session) -> Vec<f64> {
+    let v = s.execute("document.pixel", json!({"x": 1, "y": 1})).unwrap();
+    v.as_array().unwrap().iter().map(|c| c.as_f64().unwrap()).collect()
+}
+
+/// A Pattern Fill step whose `Ptrn` names both an installed id and a display name shared by
+/// another pattern plays the pattern with that id; a foreign id falls back to the name.
+#[test]
+fn pattern_fill_prefers_an_installed_id_over_a_colliding_name() {
+    let mut s = Session::new();
+    s.execute("file.new", json!({"width": 4, "height": 4, "mode": "rgb", "depth": 8})).unwrap();
+    let mut define = |color: &str| {
+        s.execute("edit.fill", json!({"contents": "color", "color": color})).unwrap();
+        s.execute("edit.definePattern", json!({"name": "Twin"})).unwrap()["pattern"].as_str().unwrap().to_string()
+    };
+    let red = define("#ff0000");
+    let blue = define("#0000ff");
+    assert_ne!(red, blue);
+    s.patterns.items.retain(|p| p.id == red || p.id == blue);
+    s.patterns.items.sort_by_key(|p| p.id != blue);
+    let fill_step = |id: &str| {
+        let t = desc("patternLayer").with("Ptrn", D::Descriptor(desc("Ptrn").with("Idnt", text(id)).with("Nm  ", text("Twin"))));
+        item(
+            "Mk  ",
+            "Make",
+            Some(desc("null").with("null", class_ref("contentLayer")).with("Usng", D::Descriptor(desc("contentLayer").with("Type", D::Descriptor(t))))),
+        )
+    };
+    let data = set_of("Pat", vec![("Installed", vec![fill_step(&red)]), ("Foreign", vec![fill_step("not-installed-id")])]);
+    let r = s.execute("actions.load", json!({"data": data})).unwrap();
+    assert!(r["unsupported"].as_array().is_none_or(|u| u.is_empty()), "{r}");
+    for (action, want) in [("Installed", [1.0, 0.0, 0.0, 1.0]), ("Foreign", [0.0, 0.0, 1.0, 1.0])] {
+        s.execute("file.new", json!({"width": 4, "height": 4, "mode": "rgb", "depth": 8})).unwrap();
+        let r = s.execute("actions.play", json!({"action": action})).unwrap();
+        assert!(r.get("failed").is_none(), "{r}");
+        let v = s.execute("document.pixel", json!({"x": 1, "y": 1})).unwrap();
+        let got: Vec<f64> = v.as_array().unwrap().iter().map(|c| c.as_f64().unwrap()).collect();
+        assert_eq!(got, want, "{action}");
+    }
+}
+
+/// The recorded id is looked up by id alone, in the document and then the library, before any
+/// name: a document pattern *named* like the id does not beat the library pattern with that id,
+/// and a foreign id that happens to be another pattern's name falls back to the recorded name.
+/// An id and a name of the same pattern play it.
+#[test]
+fn pattern_fill_ids_beat_names_across_document_and_library() {
+    let mut s = Session::new();
+    s.execute("file.new", json!({"width": 4, "height": 4, "mode": "rgb", "depth": 8})).unwrap();
+    let red = define_pattern(&mut s, "#ff0000", "Red");
+    define_pattern(&mut s, "#0000ff", "Blue");
+    let green = define_pattern(&mut s, "#00ff00", &red);
+    let data = set_of(
+        "Pat",
+        vec![
+            ("IdWins", vec![pattern_fill_step(&red, "Blue")]),
+            ("NameFallback", vec![pattern_fill_step("Red", "Blue")]),
+            ("Same", vec![pattern_fill_step(&red, "Red")]),
+        ],
+    );
+    s.execute("actions.load", json!({"data": data})).unwrap();
+    // Only the playback document holds the green pattern named like the red one's id.
+    s.execute("file.new", json!({"width": 4, "height": 4, "mode": "rgb", "depth": 8})).unwrap();
+    s.execute("layer.newFillLayer.pattern", json!({"pattern": green})).unwrap();
+    s.execute("pattern.delete", json!({"pattern": green})).unwrap();
+    assert!(s.active().unwrap().doc.patterns.iter().any(|p| p.id == green && p.name == red));
+    assert_eq!(pixel(&mut s), [0.0, 1.0, 0.0, 1.0]);
+    for (action, want) in [("IdWins", [1.0, 0.0, 0.0, 1.0]), ("NameFallback", [0.0, 0.0, 1.0, 1.0]), ("Same", [1.0, 0.0, 0.0, 1.0])] {
+        let r = s.execute("actions.play", json!({"action": action})).unwrap();
+        assert!(r.get("failed").is_none(), "{action}: {r}");
+        assert_eq!(pixel(&mut s), want, "{action}");
+    }
+}
+
+/// A recorded pattern installed neither by id nor by name fails with an error that names the
+/// pattern, from the imported step and from the Pattern Fill dialog's command alike.
+#[test]
+fn pattern_fill_missing_everywhere_names_the_pattern() {
+    let mut s = Session::new();
+    s.execute("file.new", json!({"width": 4, "height": 4, "mode": "rgb", "depth": 8})).unwrap();
+    define_pattern(&mut s, "#ff0000", "Red");
+    let data = set_of("Pat", vec![("Missing", vec![pattern_fill_step("5e1c0000-aaaa-4bbb-8ccc-000000000000", "My Wood")])]);
+    s.execute("actions.load", json!({"data": data})).unwrap();
+    let r = s.execute("actions.play", json!({"action": "Missing"})).unwrap();
+    let err = r["failed"]["error"].as_str().unwrap_or_default();
+    assert!(err.contains("\"My Wood\""), "{r}");
+    s.execute("layer.newFillLayer.pattern", json!({"pattern": "Red"})).unwrap();
+    let e = s.execute("layer.fill.pattern.set", json!({"pattern": "5e1c0000-aaaa-4bbb-8ccc-000000000000", "patternName": "My Wood"})).unwrap_err();
+    assert!(e.to_string().contains("\"My Wood\""), "{e}");
 }

@@ -9,14 +9,23 @@ use super::tables::{LABEL_COLORS, MODES, blend_label, blend_ps, lookup, lookup_b
 use super::{D, Descriptor, Id, Map, ReferenceItem, Value, json};
 
 /// A `patternLayer` descriptor's pattern, scale, angle and link as the params of
-/// `layer.newFillLayer.pattern` / `layer.fill.pattern.set`. The pattern goes by name: ids differ
-/// between Photoshop's library and one rebuilt from the same `.pat` file. None for a pattern
-/// recorded without a name or id.
+/// `layer.newFillLayer.pattern` / `layer.fill.pattern.set`. A pattern recorded with both an id
+/// and a name goes by the id with the name as `patternName`: ids differ between Photoshop's
+/// library and one rebuilt from the same `.pat` file, while names may collide. None for a
+/// pattern recorded without a name or id.
 fn pattern_params(t: &Descriptor) -> Option<Map<String, Value>> {
     let mut p = Map::new();
     if let Some(ptrn) = get_obj(t, "Ptrn") {
-        let key = get_text(ptrn, "Nm  ").filter(|n| !n.is_empty()).or_else(|| get_text(ptrn, "Idnt").filter(|i| !i.is_empty()))?;
-        p.insert("pattern".into(), key.into());
+        let name = get_text(ptrn, "Nm  ").filter(|n| !n.is_empty());
+        match (get_text(ptrn, "Idnt").filter(|i| !i.is_empty()), name) {
+            (Some(id), Some(name)) => {
+                p.insert("pattern".into(), id.into());
+                p.insert("patternName".into(), name.into());
+            }
+            (key, name) => {
+                p.insert("pattern".into(), key.or(name)?.into());
+            }
+        }
     }
     if let Some(s) = get_num(t, "Scl ") {
         p.insert("scale".into(), s.into());
@@ -33,8 +42,10 @@ fn pattern_params(t: &Descriptor) -> Option<Map<String, Value>> {
 /// The `patternLayer` descriptor for [`pattern_params`]' params.
 fn pattern_desc(p: &Value) -> Option<Descriptor> {
     let mut t = desc("patternLayer");
-    if let Some(n) = jstr(p, "pattern") {
-        t = t.with("Ptrn", D::Descriptor(desc("Ptrn").with("Nm  ", text(n))));
+    match (jstr(p, "pattern"), jstr(p, "patternName")) {
+        (Some(id), Some(n)) => t = t.with("Ptrn", D::Descriptor(desc("Ptrn").with("Nm  ", text(n)).with("Idnt", text(id)))),
+        (Some(n), None) => t = t.with("Ptrn", D::Descriptor(desc("Ptrn").with("Nm  ", text(n)))),
+        _ => {}
     }
     if let Some(s) = jnum(p, "scale") {
         t = t.with("Scl ", pct(s));
