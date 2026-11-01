@@ -2823,6 +2823,7 @@ fn adjustment_layer_set_accepts_the_vibrance_string_class() {
             ..Default::default()
         }],
         warnings: vec![],
+        ..Default::default()
     };
     let action = import(&atn::write(&file).unwrap()).unwrap().actions.remove(0);
     assert_eq!(action.steps[0].0, "layer.setAdjustment", "{:?}", action.steps);
@@ -3314,6 +3315,7 @@ fn camera_raw_filter_steps_import_as_filter_camera_raw() {
         expanded: false,
         actions: vec![AtnAction { name: UnicodeString::new_nul("Warm"), items, ..Default::default() }],
         warnings: vec![],
+        ..Default::default()
     };
     let imp = import(&atn::write(&file).unwrap()).unwrap();
     let steps = &imp.actions[0].steps;
