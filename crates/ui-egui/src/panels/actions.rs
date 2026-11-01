@@ -98,12 +98,14 @@ fn playback_targets(app: &PhotocraftApp) -> Vec<usize> {
 }
 
 /// Play `targets` one after another, stopping at the first that fails or can't start. One that
-/// pauses for a step dialog hands the rest to that dialog, which plays them after its OK (Cancel
-/// stops them all, as it stops one action). Returns the last result with `ran` counting the steps
+/// pauses for a step dialog of its own hands the rest to that dialog, which plays them after its OK
+/// (Cancel stops them all, as it stops one action). A pause inside an action it calls resumes only
+/// the called action, so the set stops there rather than run its next action on an unfinished one. Returns the last result with `ran` counting the steps
 /// of all of them, or `None` when there was nothing to play.
 fn play_targets(app: &mut PhotocraftApp, targets: &[usize]) -> Result<Option<Value>, String> {
     let (mut last, mut ran) = (None, 0u64);
     for (n, &i) in targets.iter().enumerate() {
+        let name = app.session.actions.list.get(i).map(|a| a.name.clone());
         let mut v = app.run("actions.play", json!({"action": i}))?;
         ran = ran.saturating_add(v.get("ran").and_then(Value::as_u64).unwrap_or(0));
         let failed = v.get("failed").is_some_and(Value::is_object);
@@ -115,7 +117,9 @@ fn play_targets(app: &mut PhotocraftApp, targets: &[usize]) -> Result<Option<Val
         if let Some(dialog) = paused.filter(|_| !failed) {
             let rest = targets.get(n + 1..).unwrap_or_default().to_vec();
             let token = app.ui.dialog_mut(dialog).and_then(|d| d.fields.get(RESUME)).and_then(Value::as_u64);
-            if let Some(entry) = token.and_then(|t| app.paused_playbacks.paused.get_mut(&t)) {
+            if let Some(entry) = token.and_then(|t| app.paused_playbacks.paused.get_mut(&t))
+                && name.as_ref() == Some(&entry.action)
+            {
                 entry.then = rest;
             }
             break;
@@ -735,11 +739,13 @@ pub fn resume(app: &mut PhotocraftApp, fields: &serde_json::Map<String, Value>) 
     let saved = app.session.authorize;
     app.session.authorize = paused.gate.or(saved);
     let mut played = play_owned(app, &params, owner);
-    // Paused again at a later dialog of the same action: that dialog carries the rest of the set.
+    // Paused again at a later dialog of the same action (not of one it calls, which resumes
+    // alone): that dialog carries the rest of the set.
     if let Ok(v) = &played
         && let Some(dialog) = v.get("paused").and_then(|p| p.get("dialog")).and_then(Value::as_u64)
         && let Some(token) = app.ui.dialog_mut(dialog).and_then(|d| d.fields.get(RESUME)).and_then(Value::as_u64)
         && let Some(entry) = app.paused_playbacks.paused.get_mut(&token)
+        && entry.action == paused.action
     {
         entry.then = paused.then.clone();
     }
@@ -994,16 +1000,16 @@ fn display_order(rows: &[Row]) -> Vec<usize> {
 }
 
 struct SetHeaderResult {
-    /// A click on the disclosure triangle: collapse or expand, the selection stays.
+    /// A click on the disclosure triangle (or an activation without a pointer): collapse or expand.
     toggled: bool,
-    /// A click on the rest of the row: select the set.
+    /// A click on the rest of the row (or an activation without a pointer): select the set.
     picked: bool,
     save: bool,
 }
 
 fn draw_set_header(ui: &mut egui::Ui, set: &str, count: u64, collapsed: bool, selected: bool, tokens: &Tokens) -> SetHeaderResult {
     let (rect, response) = ui.allocate_exact_size(vec2(ui.available_width(), 24.0), Sense::click());
-    response.widget_info(|| egui::WidgetInfo::selected(egui::Role::Button, true, !collapsed, set));
+    response.widget_info(|| egui::WidgetInfo::selected(egui::Role::Button, true, selected, set));
     if selected {
         ui.painter().rect_filled(rect, 0.0, tokens.row_selected);
     } else if response.hovered() {
@@ -1026,10 +1032,12 @@ fn draw_set_header(ui: &mut egui::Ui, set: &str, count: u64, collapsed: bool, se
     ui.painter().text(pos2(rect.left() + 44.0, rect.center().y), Align2::LEFT_CENTER, set, egui::FontId::proportional(12.0), tokens.text);
     let summary = crate::i18n::trn(crate::i18n::current(), count, "{n} action", "{n} actions");
     ui.painter().text(pos2(rect.right() - 8.0, rect.center().y), Align2::RIGHT_CENTER, summary, egui::FontId::proportional(11.0), tokens.text_faint);
-    // As on an action row, the triangle's column collapses or expands and the rest of the row
-    // selects; neither does the other's job.
-    let toggled = response.clicked() && response.interact_pointer_pos().is_some_and(|p| p.x < rect.left() + 20.0);
-    let picked = response.clicked() && !toggled;
+    // As on an action row, a click in the triangle's column collapses or expands and one on the
+    // rest of the row selects. An activation without a pointer (keyboard, accessibility) does
+    // both, so the set can still be collapsed and expanded without a mouse.
+    let pointer = response.interact_pointer_pos();
+    let toggled = response.clicked() && pointer.is_none_or(|p| p.x < rect.left() + 20.0);
+    let picked = response.clicked() && pointer.is_none_or(|p| p.x >= rect.left() + 20.0);
     let mut save = false;
     response.context_menu(|ui| {
         if ui.button(tl!("Save Set…")).clicked() {
@@ -1041,15 +1049,16 @@ fn draw_set_header(ui: &mut egui::Ui, set: &str, count: u64, collapsed: bool, se
 }
 
 /// The sets New Set made that hold no action yet: empty folder rows after the rest. Returns the
-/// set whose row was clicked (and whether on its triangle) and the set whose Save Set… was chosen.
-fn draw_empty_sets(app: &PhotocraftApp, ui: &mut egui::Ui, rows: &[Row], t: &Tokens) -> (Option<(String, bool)>, Option<String>) {
+/// set whose row was clicked (whether it toggles, whether it selects) and the set whose Save Set…
+/// was chosen.
+fn draw_empty_sets(app: &PhotocraftApp, ui: &mut egui::Ui, rows: &[Row], t: &Tokens) -> (Option<(String, bool, bool)>, Option<String>) {
     let (mut clicked, mut save) = (None, None);
     for set in app.session.actions.sets.iter().filter(|set| !rows.iter().any(|r| r.set.as_ref() == Some(*set))) {
         let selected = app.ui.actions.selected.is_none() && app.ui.actions.selected_set.as_ref() == Some(set);
         let collapsed = app.ui.actions.collapsed_sets.contains(set);
         let result = draw_set_header(ui, set, 0, collapsed, selected, t);
         if result.toggled || result.picked {
-            clicked = Some((set.clone(), result.toggled));
+            clicked = Some((set.clone(), result.toggled, result.picked));
         }
         if result.save {
             save = Some(set.clone());
@@ -1136,7 +1145,7 @@ pub fn panel(app: &mut PhotocraftApp, ui: &mut egui::Ui) {
     let mut renamed = None;
     let mut toggled = None;
     let mut dialog_toggled = None;
-    let mut set_toggled: Option<(String, bool)> = None;
+    let mut set_toggled: Option<(String, bool, bool)> = None;
     let mut save_set: Option<String> = None;
     let max_h = (ui.available_height() - 38.0).max(0.0);
     let mut play_idx: Option<Vec<usize>> = None;
@@ -1168,7 +1177,7 @@ pub fn panel(app: &mut PhotocraftApp, ui: &mut egui::Ui) {
                 let selected = app.ui.actions.selected.is_none() && app.ui.actions.selected_set.as_deref() == Some(set);
                 let result = draw_set_header(ui, set, count, collapsed, selected, &t);
                 if result.toggled || result.picked {
-                    set_toggled = Some((set.to_string(), result.toggled));
+                    set_toggled = Some((set.to_string(), result.toggled, result.picked));
                 }
                 if result.save {
                     save_set = Some(set.to_string());
@@ -1279,21 +1288,22 @@ pub fn panel(app: &mut PhotocraftApp, ui: &mut egui::Ui) {
     if let Some((action, step)) = dialog_toggled {
         let _ = app.run("actions.dialog", json!({"action": action, "step": step}));
     }
-    match set_toggled {
-        // The disclosure triangle collapses or expands the set and leaves the selection alone.
-        Some((set, true)) => match app.ui.actions.collapsed_sets.iter().position(|c| *c == set) {
-            Some(i) => {
-                app.ui.actions.collapsed_sets.remove(i);
-            }
-            None => app.ui.actions.collapsed_sets.push(set),
-        },
+    if let Some((set, toggle, pick)) = set_toggled {
         // The rest of the folder row selects the set, for New Action and Play.
-        Some((set, false)) => {
+        if pick {
             app.ui.actions.selected = None;
             app.ui.actions.selected_step = None;
-            app.ui.actions.selected_set = Some(set);
+            app.ui.actions.selected_set = Some(set.clone());
         }
-        None => {}
+        // The disclosure triangle collapses or expands the set and leaves the selection alone.
+        if toggle {
+            match app.ui.actions.collapsed_sets.iter().position(|c| *c == set) {
+                Some(i) => {
+                    app.ui.actions.collapsed_sets.remove(i);
+                }
+                None => app.ui.actions.collapsed_sets.push(set),
+            }
+        }
     }
     if let Some(set) = save_set
         && let Err(e) = save_dialog(app, Some(set))

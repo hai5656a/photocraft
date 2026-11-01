@@ -836,6 +836,53 @@ fn a_set_paused_at_a_step_dialog_plays_its_other_actions_after_ok() {
     }
 }
 
+/// #10459 fix-up: a set whose action pauses at a dialog inside an action it calls stops there:
+/// the called action resumes alone, so the next action of the set must not run on a caller that
+/// never finished.
+#[test]
+fn a_set_paused_inside_a_called_action_stops_there() {
+    use egui_kittest::kittest::Queryable;
+    let mut app = PhotocraftApp::new(photocraft_engine::Session::new(), crate::Services::default());
+    app.run("file.new", json!({"width": 8, "height": 8})).unwrap();
+    let mut a = Action::new("A", vec![("actions.play".into(), json!({"action": "C"})), ("layer.new.layer".into(), json!({"name": "a-tail"}))]);
+    a.set = Some("S".into());
+    let mut b = Action::new("B", vec![("layer.new.layer".into(), json!({"name": "b"}))]);
+    b.set = Some("S".into());
+    let mut c = Action::new("C", vec![("filter.blur.gaussianBlur".into(), json!({"radius": 1})), ("layer.new.layer".into(), json!({"name": "c"}))]);
+    c.dialogs.insert(0);
+    app.session.actions.list.extend([a, b, c]);
+    let mut h = egui_kittest::Harness::builder().with_size(vec2(360.0, 400.0)).build_ui_state(|ui, app| panel(app, ui), app);
+    h.run_steps(2);
+    h.get_by_label("S").click();
+    h.run_steps(2);
+    h.get_by_label("Play selection").click();
+    h.run_steps(2);
+    let dialog = h.state().ui.dialogs.last().map(|d| d.id).expect("C's blur dialog");
+    crate::dialogs::confirm(h.state_mut(), dialog).unwrap();
+    h.run_steps(2);
+    assert_eq!(layer_names(h.state()), ["c"], "C finished; B didn't run ahead of A's tail");
+}
+
+/// #10459 fix-up: a set folder activated without a pointer (keyboard, accessibility) still
+/// collapses and expands, and selects the set; the row reports whether it is selected.
+#[test]
+fn a_set_folder_toggles_without_a_pointer() {
+    use egui_kittest::kittest::Queryable;
+    let mut h = two_set_panel();
+    use egui::accesskit::Toggled;
+    use egui_kittest::kittest::NodeT;
+    let selected = |h: &egui_kittest::Harness<'_, PhotocraftApp>| h.get_by_label("Retouch").accesskit_node().toggled();
+    assert_eq!(selected(&h), Some(Toggled::False));
+    h.get_by_label("Retouch").click_accesskit();
+    h.run_steps(2);
+    assert_eq!(h.state().ui.actions.collapsed_sets, ["Retouch"]);
+    assert_eq!(h.state().ui.actions.selected_set.as_deref(), Some("Retouch"));
+    assert_eq!(selected(&h), Some(Toggled::True), "selected and collapsed reads as selected");
+    h.get_by_label("Retouch").click_accesskit();
+    h.run_steps(2);
+    assert!(h.state().ui.actions.collapsed_sets.is_empty());
+}
+
 /// #7535: the folder button (and the panel menu's New Set…) names an empty set, shown as a folder
 /// row with no actions; New Action then records into it, as into any selected set.
 #[test]
