@@ -275,7 +275,7 @@ pub(super) const EVENTS: &[Event] = &[
     adjustment_event!("Pstr", "Pstr", "posterize", "Posterize"),
     adjustment_event!("Invr", "Invr", "invert", "Invert"),
     adjustment_event!("ClrB", "ClrB", "colorBalance", "Color Balance"),
-    adjustment_event!("Vbrn", "Vbrn", "vibrance", "Vibrance"),
+    adjustment_event!("Vbrn", "vibrance", "vibrance", "Vibrance"),
     adjustment_event!("Exps", "Exps", "exposure", "Exposure"),
     // Photoshop runs Photo Filter by name only: `PhtF` is the class, not an event (#8301).
     adjustment_event!("", "PhtF", "photoFilter", "Photo Filter"),

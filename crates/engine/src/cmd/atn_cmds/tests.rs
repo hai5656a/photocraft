@@ -2786,6 +2786,97 @@ fn adjustment_layer_reset_still_resets() {
     assert_eq!(steps[1].1, json!({"midtones": [10, 0, 0], "kind": "colorBalance"}));
 }
 
+/// Photoshop's Properties panel records an edit of an existing Vibrance layer with the string
+/// class `vibrance`, not the `Vbrn` code: both import as the same `layer.setAdjustment` (#8534).
+#[test]
+fn adjustment_layer_set_accepts_the_vibrance_string_class() {
+    let set = |class: &str| {
+        let t = desc(class).with("temperature", long(0.0)).with("tint", long(0.0)).with("vibrance", long(28.0)).with("Strt", long(-7.0));
+        desc("null").with("null", target_ref("AdjL")).with("T   ", D::Descriptor(t))
+    };
+    let file = AtnFile {
+        name: UnicodeString::new_nul("Vibrance"),
+        expanded: false,
+        actions: vec![AtnAction {
+            name: UnicodeString::new_nul("A"),
+            items: vec![item("set", "Set", Some(set("vibrance"))), item("set", "Set", Some(set("Vbrn")))],
+            ..Default::default()
+        }],
+        warnings: vec![],
+    };
+    let action = import(&atn::write(&file).unwrap()).unwrap().actions.remove(0);
+    assert_eq!(action.steps[0].0, "layer.setAdjustment", "{:?}", action.steps);
+    assert_eq!(action.steps[0].1, json!({"vibrance": 28, "saturation": -7, "kind": "vibrance"}));
+    assert_eq!(action.steps[0], action.steps[1]);
+}
+
+/// A Vibrance Set and Make as Photoshop records them (class `vibrance`) save back with that
+/// class, not the `Vbrn` code Photoshop refuses (#8383); old PhotoCraft files with `Vbrn` still
+/// load and now save with `vibrance` too.
+#[test]
+fn vibrance_adjustment_layer_steps_save_with_the_string_class() {
+    let set = |class: &str| {
+        let t = desc(class).with("temperature", long(0.0)).with("tint", long(0.0)).with("vibrance", long(28.0)).with("Strt", long(-7.0));
+        desc("null").with("null", target_ref("AdjL")).with("T   ", D::Descriptor(t))
+    };
+    let make = |class: &str| {
+        let t = desc(class).with("vibrance", long(10.0)).with("Strt", long(5.0));
+        desc("null").with("null", class_ref("AdjL")).with("Usng", D::Descriptor(desc("AdjL").with("Type", D::Descriptor(t))))
+    };
+    let data = set_of(
+        "Vibrance",
+        vec![(
+            "A",
+            vec![
+                item("set", "Set", Some(set("vibrance"))),
+                item("Mk  ", "Make", Some(make("vibrance"))),
+                item("set", "Set", Some(set("Vbrn"))),
+                item("Mk  ", "Make", Some(make("Vbrn"))),
+            ],
+        )],
+    );
+    let mut s = Session::new();
+    let loaded = s.execute("actions.load", json!({"data": data})).unwrap();
+    assert_eq!(loaded["unsupported"], json!([]), "{loaded}");
+    let steps = &s.actions.list[0].steps;
+    assert_eq!(steps[1], ("layer.newAdjustmentLayer.vibrance".to_string(), json!({"vibrance": 10, "saturation": 5})), "{steps:?}");
+    assert_eq!((&steps[0], &steps[1]), (&steps[2], &steps[3]), "the old `Vbrn` class imports the same");
+    let saved = s.execute("actions.save", json!({"set": "Vibrance"})).unwrap();
+    assert_eq!(saved["skipped"], json!([]));
+    let bytes = photocraft_paint::tile::b64_decode(saved["data"].as_str().unwrap()).unwrap();
+    let file = atn::parse(&bytes).unwrap();
+    let items = &file.actions[0].items;
+    assert_eq!(items.len(), 4);
+    for pair in items.chunks(2) {
+        let t = get_obj(pair[0].descriptor.as_ref().unwrap(), "T   ").unwrap();
+        assert!(t.class_id.is("vibrance"), "Set class {:?}", t.class_id);
+        let ty = get_obj(pair[1].descriptor.as_ref().unwrap(), "Usng").and_then(|u| get_obj(u, "Type")).unwrap();
+        assert!(ty.class_id.is("vibrance"), "Make class {:?}", ty.class_id);
+    }
+    let mut reloaded = Session::new();
+    reloaded.execute("actions.load", json!({"data": saved["data"]})).unwrap();
+    assert_eq!(reloaded.actions.list[0].steps, s.actions.list[0].steps);
+}
+
+/// Our Vibrance has no `temperature` or `tint`: a recorded Vibrance Set or Make with either one
+/// non-zero stays a kept Photoshop step and saves back unchanged instead of losing them.
+#[test]
+fn vibrance_steps_with_temperature_or_tint_save_back_unchanged() {
+    let t = || desc("vibrance").with("temperature", long(0.0)).with("tint", long(12.0)).with("vibrance", long(28.0)).with("Strt", long(-7.0));
+    let set = desc("null").with("null", target_ref("AdjL")).with("T   ", D::Descriptor(t()));
+    let warm = desc("vibrance").with("temperature", long(-20.0)).with("vibrance", long(5.0));
+    let make = desc("null").with("null", class_ref("AdjL")).with("Usng", D::Descriptor(desc("AdjL").with("Type", D::Descriptor(warm))));
+    let data = set_of("Vibrance", vec![("A", vec![item("set", "Set", Some(set.clone())), item("Mk  ", "Make", Some(make.clone()))])]);
+    let mut s = Session::new();
+    s.execute("actions.load", json!({"data": data})).unwrap();
+    assert!(s.actions.list[0].steps.iter().all(|(id, _)| id == "actions.photoshopStep"), "{:?}", s.actions.list[0].steps);
+    let saved = s.execute("actions.save", json!({"set": "Vibrance"})).unwrap();
+    let bytes = photocraft_paint::tile::b64_decode(saved["data"].as_str().unwrap()).unwrap();
+    let file = atn::parse(&bytes).unwrap();
+    assert_eq!(file.actions[0].items[0].descriptor, Some(set));
+    assert_eq!(file.actions[0].items[1].descriptor, Some(make));
+}
+
 /// A Free Transform recorded against an unlinked mask or an alpha channel must not export as a
 /// layer transform that moves the layer's pixels on replay (#7195).
 #[test]

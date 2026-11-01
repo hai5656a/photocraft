@@ -405,6 +405,18 @@ macro_rules! adj_fields {
     };
 }
 
+const VIBRANCE: &[F] = &[F("vibrance", "vibrance", Kind::Long), F("Strt", "saturation", Kind::Long)];
+
+/// Vibrance. Photoshop's recording also carries `temperature` and `tint`, which our Vibrance has
+/// no params for: with either one non-zero the step stays a kept Photoshop step (saved back
+/// unchanged) instead of playing and saving without them.
+fn vibrance_from(d: &Descriptor) -> Option<Value> {
+    if ["temperature", "tint"].iter().any(|k| get_num(d, k).is_some_and(|v| v != 0.0)) {
+        return None;
+    }
+    fields_from(d, VIBRANCE).map(Value::Object)
+}
+
 const ADJUSTMENTS: &[Adjustment] = &[
     Adjustment { class: "Lvls", suffix: "levels", from: levels_from, to: levels_to },
     Adjustment { class: "Crvs", suffix: "curves", from: curves_from, to: curves_to },
@@ -414,7 +426,7 @@ const ADJUSTMENTS: &[Adjustment] = &[
     adj_fields!("Pstr", "posterize", &[F("Lvls", "levels", Kind::Long)]),
     adj_fields!("Invr", "invert", &[]),
     Adjustment { class: "ClrB", suffix: "colorBalance", from: color_balance_from, to: color_balance_to },
-    adj_fields!("Vbrn", "vibrance", &[F("vibrance", "vibrance", Kind::Long), F("Strt", "saturation", Kind::Long)]),
+    Adjustment { class: "vibrance", suffix: "vibrance", from: vibrance_from, to: |p| fields_to(p, VIBRANCE, desc("vibrance")) },
     adj_fields!("Exps", "exposure", &[F("Exps", "exposure", Kind::Dbl), F("Ofst", "offset", Kind::Dbl), F("gammaCorrection", "gamma", Kind::Dbl)]),
     Adjustment { class: "PhtF", suffix: "photoFilter", from: |d| fields_from(d, PHOTO_FILTER_FIELDS).map(Value::Object), to: photo_filter_to },
     adj_fields!("BanW", "blackWhite", BW),
@@ -427,7 +439,9 @@ const ADJUSTMENTS: &[Adjustment] = &[
 /// Photoshop (#8481): a Make whose Black & White type is `BlnW` fails ("the command Make is not
 /// currently available"), `BanW` runs. Import keeps accepting them so actions saved before still
 /// load; export never writes them.
-const LEGACY_CLASSES: &[(&str, &str)] = &[("BlnW", "BanW")];
+/// `Vbrn` is a code PhotoCraft invented for Vibrance: Photoshop records the class by its string id
+/// `vibrance` (#8534), and refuses the `Vbrn` code (#8383).
+const LEGACY_CLASSES: &[(&str, &str)] = &[("BlnW", "BanW"), ("Vbrn", "vibrance")];
 
 /// The adjustment with Photoshop class `c`, or the one an old PhotoCraft class stands for.
 pub(super) fn adjustment_by_class(c: &str) -> Option<&'static Adjustment> {
