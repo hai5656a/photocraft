@@ -785,6 +785,41 @@ fn save_actions_with_a_set_selected_saves_that_set() {
     assert!(matches!(asked.borrow().as_slice(), [crate::file_dialog::FileDialogRequest::Save { suggested }] if suggested == "Web.atn"), "{:?}", asked.borrow());
 }
 
+/// FredApps review on #10459: a set name can hold characters a file name can't. Save Actions…
+/// suggests the file with them replaced, and the set keeps its name in the file. The set here
+/// is an empty one New Set made, which Save Actions… writes as Photoshop does.
+#[test]
+fn save_actions_suggests_a_file_name_without_path_characters() {
+    use egui_kittest::{Harness, kittest::Queryable};
+    let (file_dialog, asked) = crate::file_dialog::fake(vec![None]);
+    let services = crate::Services { file_dialog: Some(file_dialog), ..Default::default() };
+    let mut app = PhotocraftApp::new(photocraft_engine::Session::new(), services);
+    app.run("file.new", json!({"width": 8, "height": 8})).unwrap();
+    app.session.actions.list.push(Action::new("Loose", vec![]));
+    let set = "Web/Print\\Mail: v2";
+    app.run("actions.newSet", json!({"name": set})).unwrap();
+    let mut h = Harness::builder().with_size(vec2(360.0, 600.0)).build_ui_state(
+        |ui, app| {
+            panel_menu(app, ui);
+            panel(app, ui);
+        },
+        app,
+    );
+    h.run_steps(2);
+    h.get_by_label(set).click();
+    h.run_steps(2);
+    h.get_by_label("Save Actions…").click();
+    h.run_steps(2);
+    h.state_mut().poll_file_dialog(&egui::Context::default(), None);
+    assert!(
+        matches!(asked.borrow().as_slice(), [crate::file_dialog::FileDialogRequest::Save { suggested }] if suggested == "Web_Print_Mail_ v2.atn"),
+        "{:?}",
+        asked.borrow()
+    );
+    let saved = h.state_mut().run("actions.save", json!({"set": set})).unwrap();
+    assert_eq!(saved["set"], set, "the file keeps the set's name");
+}
+
 #[test]
 fn moving_an_action_next_to_another_set_joins_it() {
     let mut app = PhotocraftApp::new(photocraft_engine::Session::new(), crate::Services::default());
