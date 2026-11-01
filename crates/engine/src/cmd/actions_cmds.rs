@@ -106,8 +106,10 @@ pub struct ActionState {
     /// Steps run by the current top-level script and everything it calls.
     #[serde(skip)]
     pub script_steps: u64,
-    /// Sets made with New Set (`actions.newSet`) that hold no action yet: the Actions panel shows
-    /// them as empty folders. A set is saved through its actions, so an empty one lasts the session.
+    /// Sets made with New Set (`actions.newSet`), or loaded from an `.atn` with no actions, that
+    /// hold no action yet: the Actions panel shows them as empty folders. Save Actions… writes one
+    /// to an `.atn` as Photoshop does, but the preset store keeps sets through their actions, so
+    /// an empty one isn't remembered past the session.
     #[serde(skip)]
     pub sets: Vec<String>,
     /// Bumped whenever `list` changes, so the preset store can skip unchanged writes.

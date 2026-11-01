@@ -323,7 +323,7 @@ pub fn specs() -> Vec<CommandSpec> {
             label: "New Set",
             menu: &[],
             shortcut: None,
-            params: r##"{"name":str? (default "Set N")} → {set}. An empty set folder in the Actions panel, as Photoshop's New Set… makes; New Action records into the selected set (actions.record's `set`). It is saved once it holds an action."##,
+            params: r##"{"name":str? (default "Set N")} → {set}. An empty set folder in the Actions panel, as Photoshop's New Set… makes; New Action records into the selected set (actions.record's `set`). Save Actions… (actions.save's `set`) writes it even while empty; it is remembered between sessions once it holds an action."##,
             enabled: always,
             run: new_set,
             journal: false,
