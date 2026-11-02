@@ -23,10 +23,9 @@
 //! don't use these options render exactly as before at no extra cost.
 //!
 //! Measured on the psd-tools knockout files (deep/shallow, nested, pass-through, no Background,
-//! groups with knockout) and on a Photoshop Linear Dodge clip with Transparency Shapes Layer off
-//! (pixel alpha as Fill: `min(1, Cb + Cs·α)`). Not yet measured against Photoshop: the clip of
-//! individually blended clipped layers (base alpha × opacity, ignoring its fill) and the masks
-//! hiding effects.
+//! groups with knockout). Not yet measured against Photoshop: the clip of individually blended
+//! clipped layers (base alpha × opacity, ignoring its fill), Transparency Shapes Layer off, and the
+//! masks hiding effects.
 
 use std::borrow::Cow;
 
