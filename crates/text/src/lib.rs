@@ -18,6 +18,7 @@
 #![deny(clippy::unwrap_used, clippy::expect_used, clippy::panic, clippy::unimplemented, clippy::todo, clippy::unreachable)]
 
 pub mod area;
+pub mod bmfont;
 pub mod cjk;
 mod color_glyphs;
 pub mod craft_fonts;
@@ -41,6 +42,11 @@ pub mod warp;
 use photocraft_color::PixelFormat;
 use photocraft_doc::TextLayer;
 
+pub use bmfont::{
+    AtlasPage, BitmapFont, BmfontError, BuildOptions as BmfontOptions, FontMetrics, GlyphBitmap, PackedGlyph, apply_offsets as bmfont_apply_offsets,
+    build as build_bmfont, charset as bmfont_charset, export_memory as export_bmfont, format_fnt, from_bitmaps as bmfont_from_bitmaps,
+    layout_string as bmfont_layout_string, rasterize_char,
+};
 pub use craft_fonts::{CRAFT_FONTS, CraftFont};
 pub use font_class::{FamilyTraits, FontClass, FontFormat};
 pub use fonts::{FaceInfo, FontDb, ResolvedFont};

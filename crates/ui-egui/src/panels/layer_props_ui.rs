@@ -1,8 +1,9 @@
 //! Properties panel for pixel (and other bounded) layers, Photoshop 2026 style: a Transform section
 //! (W/H/X/Y of the layer content, editable), Align and Distribute, the kind's sections and Quick Actions. Edits dispatch
-//! `edit.transform`, `layer.translate`, `layer.align.*` and selection commands.
+//! `edit.transform`, `layer.translate`, `layer.align.*` and selection commands. Groups show the same
+//! Transform box (children union); W/H are read-only and X/Y still run `layer.translate`.
 
-use egui::{Rect, Sense, Stroke, pos2, vec2};
+use egui::{Align2, Rect, Sense, Stroke, StrokeKind, pos2, vec2};
 use photocraft_doc::{Layer, LayerContent};
 use serde_json::{Value, json};
 
@@ -191,6 +192,34 @@ fn frame(layer: &Layer, px: photocraft_geom::Rect) -> [f64; 4] {
     path.map_or([f64::from(px.x0), f64::from(px.y0), f64::from(px.x1), f64::from(px.y1)], |c| [c.0, c.1, c.2, c.3])
 }
 
+/// Content box for Properties › Transform: surface-backed layers use their pixel/path frame; groups
+/// use the Free Transform / Move-controls union ([`transform_cmds::transform_frame`]). Empty groups
+/// and unbounded kinds (fill, adjustment) return `None`.
+fn property_frame(app: &mut PhotocraftApp, layer: &Layer) -> Option<[f64; 4]> {
+    if let Some(s) = layer.surface() {
+        return Some(frame(layer, app.layer_frame_bounds(layer, s)));
+    }
+    if !layer.is_group() {
+        return None;
+    }
+    let st = app.session.active()?;
+    let b = photocraft_engine::transform_cmds::transform_frame(&st.doc, layer);
+    (!b.is_empty()).then_some([f64::from(b.x0), f64::from(b.y0), f64::from(b.x1), f64::from(b.y1)])
+}
+
+/// A Transform W/H readout that looks like a value field but does not accept edits (group size is
+/// the union of its children).
+fn readonly_field(ui: &mut egui::Ui, label: (&str, &str), name: &str, current: f32, width: f32, len: (LenUnit, f64)) {
+    let (u, extent) = len;
+    stacked_label(ui, tl!(label.0), &[tl!(label.0), tl!(label.1)], LABEL_W, 2.0);
+    let t = Tokens::get(ui.ctx());
+    let text = format!("{} {}", widgets::fmt_num(f64::from(u.shown(f64::from(current), extent))), u.unit.suffix());
+    let (r, resp) = ui.allocate_exact_size(vec2(width, widgets::VALUE_FIELD_H), Sense::hover());
+    ui.painter().rect_stroke(r, t.radius_sm, Stroke::new(1.0, t.field_border.gamma_multiply(0.6)), StrokeKind::Inside);
+    ui.painter().text(r.left_center() + vec2(6.0, 0.0), Align2::LEFT_CENTER, text, crate::theme::mono(12.0), t.text_faint);
+    resp.widget_info(|| egui::WidgetInfo::labeled(egui::Role::Label, true, tl!(name)));
+}
+
 /// Width of the link toggle between the W and H fields (the X/Y row leaves the same gap).
 const LINK_W: f32 = 20.0;
 
@@ -199,8 +228,8 @@ const LINK_W: f32 = 20.0;
 /// Actions, all with the same collapsible headers (#155).
 pub fn properties(app: &mut PhotocraftApp, ui: &mut egui::Ui, layer: &Layer) {
     let mut run: Vec<(String, Value)> = Vec::new();
-    if let Some(s) = layer.surface() {
-        let bb = frame(layer, app.layer_frame_bounds(layer, s));
+    if let Some(bb) = property_frame(app, layer) {
+        let group = layer.is_group();
         let u = LenUnit::of(app);
         let (dw, dh) = app.session.active().map_or((1.0, 1.0), |s| (f64::from(s.doc.size.width), f64::from(s.doc.size.height)));
         let (tw, th) = (edit_tolerance(layer, u, dw), edit_tolerance(layer, u, dh));
@@ -211,13 +240,21 @@ pub fn properties(app: &mut PhotocraftApp, ui: &mut egui::Ui, layer: &Layer) {
             let w = ((ui.available_width() - 2.0 * (LABEL_W + LABEL_GAP) - LINK_W - 2.0 * LABEL_GAP) / 2.0).max(36.0);
             ui.horizontal(|ui| {
                 ui.spacing_mut().item_spacing.x = LABEL_GAP;
-                if let Some(v) = field(ui, ("w", layer.id.0), ("W", "X"), "Width", (bb[2] - bb[0]) as f32, w, (u, dw, bb[2] - bb[0]), tw) {
+                if group {
+                    readonly_field(ui, ("W", "X"), "Width", (bb[2] - bb[0]) as f32, w, (u, dw));
+                } else if let Some(v) = field(ui, ("w", layer.id.0), ("W", "X"), "Width", (bb[2] - bb[0]) as f32, w, (u, dw, bb[2] - bb[0]), tw) {
                     run.extend(transform_params(layer.id.0, bb, Some(v), None, linked, tw).map(|p| ("edit.transform".to_string(), p)));
                 }
-                if crate::icons::button(ui, if linked { "link" } else { "unlink" }, LINK_W, linked, tl!("Link width and height")).clicked() {
+                if group {
+                    // Keep the W/H column gap; size is not editable so the link does nothing.
+                    let (r, _) = ui.allocate_exact_size(vec2(LINK_W, LINK_W), Sense::hover());
+                    crate::icons::paint(ui, r, "link", 12.0, Tokens::get(ui.ctx()).text_faint);
+                } else if crate::icons::button(ui, if linked { "link" } else { "unlink" }, LINK_W, linked, tl!("Link width and height")).clicked() {
                     ui.data_mut(|d| d.insert_temp(link_key, !linked));
                 }
-                if let Some(v) = field(ui, ("h", layer.id.0), ("H", "Y"), "Height", (bb[3] - bb[1]) as f32, w, (u, dh, bb[3] - bb[1]), th) {
+                if group {
+                    readonly_field(ui, ("H", "Y"), "Height", (bb[3] - bb[1]) as f32, w, (u, dh));
+                } else if let Some(v) = field(ui, ("h", layer.id.0), ("H", "Y"), "Height", (bb[3] - bb[1]) as f32, w, (u, dh, bb[3] - bb[1]), th) {
                     run.extend(transform_params(layer.id.0, bb, None, Some(v), linked, th).map(|p| ("edit.transform".to_string(), p)));
                 }
             });
@@ -248,6 +285,9 @@ pub fn properties(app: &mut PhotocraftApp, ui: &mut egui::Ui, layer: &Layer) {
             app.ui.status = e;
             app.ui.status_error = true;
         }
+    }
+    if !gradient {
+        crate::layer_gap_ui::properties(app, ui);
     }
     match &layer.content {
         LayerContent::Text(_) => crate::type_tool::type_properties(app, ui),
@@ -321,6 +361,7 @@ pub fn selection_align(app: &mut PhotocraftApp, ui: &mut egui::Ui) {
             app.ui.status_error = true;
         }
     }
+    crate::layer_gap_ui::properties(app, ui);
 }
 
 #[cfg(test)]
@@ -359,6 +400,55 @@ mod tests {
     }
 
     /// #7314: in the Transform section W sits over X and H over Y, and each pair shares a centre.
+    #[test]
+    fn a_group_shows_transform_with_readonly_size_and_editable_position() {
+        let mut app = PhotocraftApp::new(photocraft_engine::Session::new(), crate::Services::default());
+        app.run("file.new", json!({"width": 300, "height": 200, "background": "transparent"})).unwrap();
+        app.run("layer.new.layer", json!({"name": "a"})).unwrap();
+        app.run("select.rect", json!({"x": 20, "y": 30, "width": 40, "height": 50})).unwrap();
+        app.run("edit.fill", json!({"color": "#ff0000"})).unwrap();
+        app.run("select.deselect", json!({})).unwrap();
+        let child = app.session.active().unwrap().active_layer.unwrap().0;
+        let gid = app.run("layer.groupLayers", json!({"name": "G"})).unwrap()["layer"].as_u64().unwrap();
+        let group = app.session.active().unwrap().doc.layer(photocraft_doc::LayerId(gid)).unwrap().clone();
+        let bb = property_frame(&mut app, &group).expect("group has a content union");
+        assert_eq!(bb, [20.0, 30.0, 60.0, 80.0]);
+
+        let mut h = egui_kittest::Harness::builder().with_size(vec2(280.0, 900.0)).build_ui_state(
+            |ui, app: &mut PhotocraftApp| {
+                if ui.ctx().cumulative_pass_nr() == 0 {
+                    PhotocraftApp::setup_context(ui.ctx(), crate::theme::ThemeKind::ProMedium);
+                    return;
+                }
+                let state = app.session.active().unwrap();
+                let layer = state.doc.layer(state.active_layer.unwrap()).unwrap().clone();
+                properties(app, ui, &layer);
+            },
+            app,
+        );
+        h.run_steps(3);
+        let sections = crate::props_layout::sections_drawn(&h.ctx);
+        assert!(sections.iter().any(|(title, _)| title == "Transform"), "{sections:?}");
+        // Moving X by +10 shifts the group's children.
+        h.state_mut().run("layer.translate", json!({"layer": gid, "dx": 10, "dy": 0})).unwrap();
+        let st = h.state().session.active().unwrap();
+        let child_b = st.doc.layer(photocraft_doc::LayerId(child)).unwrap().surface().unwrap().content_bounds();
+        assert_eq!((child_b.x0, child_b.y0), (30, 30));
+        let group = st.doc.layer(photocraft_doc::LayerId(gid)).unwrap().clone();
+        let bb = property_frame(h.state_mut(), &group).unwrap();
+        assert_eq!(bb, [30.0, 30.0, 70.0, 80.0]);
+    }
+
+    #[test]
+    fn an_empty_group_has_no_transform_frame() {
+        let mut app = PhotocraftApp::new(photocraft_engine::Session::new(), crate::Services::default());
+        app.run("file.new", json!({"width": 100, "height": 100, "background": "transparent"})).unwrap();
+        app.run("layer.new.group", json!({"name": "Empty"})).unwrap();
+        let id = app.session.active().unwrap().active_layer.unwrap();
+        let layer = app.session.active().unwrap().doc.layer(id).unwrap().clone();
+        assert!(property_frame(&mut app, &layer).is_none());
+    }
+
     #[test]
     fn transform_labels_are_centred_on_each_other() {
         let mut app = PhotocraftApp::new(photocraft_engine::Session::new(), crate::Services::default());

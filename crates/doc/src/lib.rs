@@ -737,6 +737,36 @@ impl Layer {
     pub fn is_group(&self) -> bool {
         matches!(self.content, LayerContent::Group(_))
     }
+    /// A type layer, or a group whose every leaf is a type layer (and which has at least one).
+    /// Used by File › Export › Bitmap Font and the Layers panel context menu.
+    pub fn is_bitmap_font_exportable(&self) -> bool {
+        match &self.content {
+            LayerContent::Text(_) => true,
+            LayerContent::Group(_) => self.is_all_text_group(),
+            _ => false,
+        }
+    }
+    /// A group whose subtree contains only type leaves (and at least one). Empty groups and
+    /// groups with any non-text leaf return false.
+    pub fn is_all_text_group(&self) -> bool {
+        let Some(children) = self.children() else { return false };
+        let mut found = false;
+        fn walk(layers: &[Layer], found: &mut bool) -> bool {
+            for l in layers {
+                match &l.content {
+                    LayerContent::Text(_) => *found = true,
+                    LayerContent::Group(g) => {
+                        if !walk(&g.children, found) {
+                            return false;
+                        }
+                    }
+                    _ => return false,
+                }
+            }
+            true
+        }
+        walk(children, &mut found) && found
+    }
     pub fn children(&self) -> Option<&[Layer]> {
         match &self.content {
             LayerContent::Group(g) => Some(&g.children),
@@ -1365,6 +1395,22 @@ mod tests {
             Locks { all: true, ..Locks::default() },
         ];
         assert!(each.iter().all(|k| k.any()));
+    }
+
+    #[test]
+    fn bitmap_font_exportable_detects_text_and_all_text_groups() {
+        let text = Layer::new("t", LayerContent::Text(TextLayer { text: "A".into(), ..Default::default() }));
+        assert!(text.is_bitmap_font_exportable());
+        assert!(!text.is_all_text_group());
+
+        let nested = Layer::group("g", vec![text.clone(), Layer::group("inner", vec![text.clone()])]);
+        assert!(nested.is_all_text_group());
+        assert!(nested.is_bitmap_font_exportable());
+
+        let mixed = Layer::group("m", vec![text, Layer::raster("px", PixelFormat::RGBA8)]);
+        assert!(!mixed.is_all_text_group());
+        assert!(!mixed.is_bitmap_font_exportable());
+        assert!(!Layer::group("empty", vec![]).is_all_text_group());
     }
 
     #[test]

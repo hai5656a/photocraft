@@ -43,7 +43,7 @@ impl Edge {
 }
 
 /// Selected top-level layers that have content bounds, bottom-to-top.
-fn bounded_selection(doc: &Document, sel: &[LayerId]) -> Vec<(LayerId, Rect)> {
+pub(crate) fn bounded_selection(doc: &Document, sel: &[LayerId]) -> Vec<(LayerId, Rect)> {
     top_level(doc, sel).into_iter().filter_map(|id| Some((id, align_bounds(doc.layer(id)?, doc.bounds(), doc.pixel_format().sample)?))).collect()
 }
 
@@ -99,7 +99,7 @@ fn board_or_canvas(doc: &Document, id: LayerId) -> Rect {
 }
 
 /// One move per layer (first wins), skipping layers nested in another moved layer.
-fn dedup_moves(doc: &Document, moves: Vec<(LayerId, i32, i32)>) -> Vec<(LayerId, i32, i32)> {
+pub(crate) fn dedup_moves(doc: &Document, moves: Vec<(LayerId, i32, i32)>) -> Vec<(LayerId, i32, i32)> {
     let mut out: Vec<(LayerId, i32, i32)> = Vec::new();
     for m in moves {
         if !out.iter().any(|o| o.0 == m.0) {

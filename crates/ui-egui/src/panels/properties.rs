@@ -111,8 +111,14 @@ fn adjustment_controls(app: &mut PhotocraftApp, ui: &mut egui::Ui, id: LayerId, 
 
 fn layer_controls(app: &mut PhotocraftApp, ui: &mut egui::Ui, layer: &Layer) {
     let t = Tokens::get(ui.ctx());
-    if let Some(s) = layer.surface() {
-        let b = app.layer_frame_bounds(layer, s);
+    let frame = if let Some(s) = layer.surface() {
+        Some(app.layer_frame_bounds(layer, s))
+    } else if layer.is_group() {
+        app.session.active().map(|st| photocraft_engine::transform_cmds::transform_frame(&st.doc, layer)).filter(|b| !b.is_empty())
+    } else {
+        None
+    };
+    if let Some(b) = frame {
         egui::Grid::new("props-grid").num_columns(2).spacing([12.0, 6.0]).show(ui, |ui| {
             for (k, v) in [("X", b.x0.to_string()), ("Y", b.y0.to_string()), ("W", b.width().to_string()), ("H", b.height().to_string())] {
                 ui.label(RichText::new(k).color(t.text_dim));

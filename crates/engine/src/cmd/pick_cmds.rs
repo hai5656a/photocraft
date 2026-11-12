@@ -199,7 +199,10 @@ fn select_in_rect(s: &mut Session, p: &Value) -> Result<Value> {
     if !hits.is_empty() || (clear_on_empty && !add) {
         let mut ids = if add { s.active().map(|st| st.selected_layers()).unwrap_or_default() } else { Vec::new() };
         ids.extend(hits.iter().filter(|id| !ids.contains(id)).copied().collect::<Vec<_>>());
-        crate::layer_multi_cmds::set_selection(s, ids, hits.first().copied(), hits.first().copied())?;
+        // Drop children when a parent group is also selected so the marquee matches the panel.
+        let ids = crate::layer_multi_cmds::top_level(&doc, &ids);
+        let active = hits.iter().copied().find(|id| ids.contains(id)).or_else(|| ids.first().copied());
+        crate::layer_multi_cmds::set_selection(s, ids, active, active)?;
     }
     Ok(json!({ "layers": hits.iter().map(|id| id.0).collect::<Vec<_>>() }))
 }

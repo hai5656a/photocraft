@@ -1628,6 +1628,7 @@ fn paint_primary_overlays(app: &mut PhotocraftApp, ui: &mut egui::Ui, view: &mut
     crate::zoom_tool::draw(ctx, painter);
     let resizing = crate::brush_resize::draw(app, painter, xf);
     draw_transform_controls(app, painter, xf);
+    crate::layer_gap_ui::draw(app, painter, xf, idx, response.hover_pos());
     crate::move_hover::draw(app, painter, xf, idx, response.hover_pos());
     crate::object_finder::draw(app, painter, xf, idx, response.hover_pos());
     crate::layer_pick_ui::show(app, ctx);

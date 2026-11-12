@@ -667,3 +667,35 @@ fn layer_thumbnail_context_menu_selects_the_clicked_layers_pixels() {
     assert!(h.query_by_label("Select Pixels").is_none(), "the Background has no pixels to load");
     h.get_by_label("Blending Options…");
 }
+
+#[test]
+fn bitmap_font_export_appears_for_text_and_all_text_groups_only() {
+    let mut s = photocraft_engine::Session::new();
+    s.execute("file.new", json!({"width": 64, "height": 64})).unwrap();
+    let raster = s.active().unwrap().doc.layers[0].clone();
+    assert!(entries(&raster, false, false).into_iter().flatten().all(|e| e.1 != "file.export.bitmapFont"));
+
+    s.execute("type.create", json!({"text": "AB", "size": 18, "x": 8, "y": 24})).unwrap();
+    let text = s.active().unwrap().doc.layer(s.active().unwrap().active_layer.unwrap()).unwrap().clone();
+    assert!(entries(&text, false, false).into_iter().flatten().any(|e| e.1 == "file.export.bitmapFont"));
+    assert!(entries(&text, true, false).into_iter().flatten().all(|e| e.1 != "file.export.bitmapFont"));
+
+    let a = s.active().unwrap().active_layer.unwrap().0;
+    s.execute("type.create", json!({"text": "12", "size": 18, "x": 8, "y": 48})).unwrap();
+    let b = s.active().unwrap().active_layer.unwrap().0;
+    s.execute("layer.select", json!({"layer": a})).unwrap();
+    s.execute("layer.select", json!({"layer": b, "mode": "add"})).unwrap();
+    let gid = s.execute("layer.new.groupFromLayers", json!({"name": "Nums"})).unwrap()["layer"].as_u64().unwrap();
+    let group = s.active().unwrap().doc.layer(photocraft_doc::LayerId(gid)).unwrap().clone();
+    assert!(group.is_all_text_group());
+    assert!(entries(&group, false, false).into_iter().flatten().any(|e| e.1 == "file.export.bitmapFont"));
+
+    s.execute("layer.new.layer", json!({})).unwrap();
+    let mixed_child = s.active().unwrap().active_layer.unwrap();
+    s.execute("layer.select", json!({"layer": gid})).unwrap();
+    s.execute("layer.select", json!({"layer": mixed_child.0, "mode": "add"})).unwrap();
+    let mixed = s.execute("layer.new.groupFromLayers", json!({"name": "Mixed"})).unwrap()["layer"].as_u64().unwrap();
+    let mixed_group = s.active().unwrap().doc.layer(photocraft_doc::LayerId(mixed)).unwrap().clone();
+    assert!(!mixed_group.is_all_text_group());
+    assert!(entries(&mixed_group, false, false).into_iter().flatten().all(|e| e.1 != "file.export.bitmapFont"));
+}

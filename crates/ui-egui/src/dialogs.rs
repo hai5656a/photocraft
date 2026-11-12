@@ -196,6 +196,8 @@ fn resizable_dialog(fields: &serde_json::Map<String, Value>) -> Option<egui::Vec
         Some(egui::vec2(960.0, 900.0))
     } else if is_curves(fields) {
         Some(CURVES_SIZE)
+    } else if crate::bitmap_font_dialog::owns(fields) {
+        Some(crate::bitmap_font_dialog::DIALOG_SIZE)
     } else {
         None
     }
@@ -212,7 +214,13 @@ const CURVES_SIZE: egui::Vec2 = egui::vec2(300.0, 420.0);
 /// The smallest a resizable dialog is dragged to: Curves keeps a usable graph (#8984), the others
 /// their two-column layouts.
 fn resizable_min(fields: &serde_json::Map<String, Value>) -> egui::Vec2 {
-    if is_curves(fields) { egui::vec2(300.0, 420.0) } else { egui::vec2(560.0, 400.0) }
+    if is_curves(fields) {
+        egui::vec2(300.0, 420.0)
+    } else if crate::bitmap_font_dialog::owns(fields) {
+        crate::bitmap_font_dialog::DIALOG_MIN
+    } else {
+        egui::vec2(560.0, 400.0)
+    }
 }
 
 /// Where the size the user last gave a resizable dialog is kept (#8984), beside its place.
@@ -245,10 +253,15 @@ fn show_modal<T>(
             ui.disable();
         }
         if let Some(size) = fixed {
-            egui::Resize::default().id(id.with("resize")).with_stroke(false).fixed_size(size).show(ui, |ui| {
-                ui.set_clip_rect(ui.clip_rect().expand(8.0));
-                contents(ui)
-            })
+            // Do not use egui::Resize here. Even `fixed_size` advances the cursor by
+            // `last_content_size`, and with `set_min_size(available)` that forms a feedback loop:
+            // the modal grows a little every frame (visibly "out to both sides" when centred).
+            let (rect, _) = ui.allocate_exact_size(size, egui::Sense::hover());
+            let mut child = ui.new_child(
+                egui::UiBuilder::new().max_rect(rect).layout(egui::Layout::top_down(egui::Align::Min)),
+            );
+            child.set_clip_rect(rect.expand(8.0));
+            contents(&mut child)
         } else if let Some((size, min, max)) = resizable {
             // No stroke: Resize outlines its contents 2 points out, an inner box inside the
             // dialog's frame that left the title and buttons flush against it (#8199).
@@ -363,6 +376,7 @@ fn command_body_more(app: &mut PhotocraftApp, ui: &mut egui::Ui, d: &Dialog, fie
         _ if fields.contains_key("__filter") => filter_body(app, ui, d, fields, id),
         _ if crate::new_guide_ui::owns(fields) => crate::new_guide_ui::body(ui, fields),
         _ if crate::equalize_ui::owns(fields) => crate::equalize_ui::body(ui, fields),
+        _ if crate::bitmap_font_dialog::owns(fields) => crate::bitmap_font_dialog::body(app, ui, fields),
         _ if fields.contains_key("__form") => {
             if fields.get("__command").and_then(Value::as_str) == Some("file.fileInfo") {
                 let room = (ui.ctx().content_rect().height() - DIALOG_CHROME).max(120.0);
@@ -654,8 +668,9 @@ pub fn show(app: &mut PhotocraftApp, ctx: &egui::Context) {
             (remembered.unwrap_or(size), min, resizable_max(ctx, &fields, min))
         });
         let mut given = None;
+        let screen = (ctx.content_rect().size() - egui::vec2(40.0, 40.0)).max(egui::vec2(320.0, 240.0));
         let fixed = (d.kind == DialogKind::LayerStyle)
-            .then(|| egui::vec2(800.0, 550.0).min((ctx.content_rect().size() - egui::vec2(40.0, 40.0)).max(egui::vec2(640.0, 360.0))));
+            .then(|| egui::vec2(800.0, 550.0).min(screen).max(egui::vec2(640.0, 360.0).min(screen)));
         let modal = show_modal(modal, ctx, id, resize, fixed, interactive, |ui| {
             sizing = ui.is_sizing_pass();
             let available = ui.available_size();
@@ -665,7 +680,8 @@ pub fn show(app: &mut PhotocraftApp, ctx: &egui::Context) {
             let compact = d.fields.contains_key("__compact");
             // The curve editor's graph is as wide as the dialog lets it be (#5113, #8984).
             let curves = is_curves(&fields);
-            if !compact {
+            let bitmap_font = crate::bitmap_font_dialog::owns(&d.fields);
+            if !compact && !bitmap_font {
                 ui.set_min_width(if curves { 300.0 } else { 380.0 });
             }
             // A resizable dialog's contents fill its resizable area (#7420), the others the window.
@@ -686,6 +702,10 @@ pub fn show(app: &mut PhotocraftApp, ctx: &egui::Context) {
             if web || fixed.is_some() {
                 ui.set_max_width(available.x);
                 ui.set_min_size(available);
+            } else if bitmap_font {
+                // Cap to the resize box. Never set_min_width(available): min==available plus any
+                // chrome (spacing/stroke) makes last_content_size grow every frame.
+                ui.set_max_width(available.x);
             } else if let Some(w) = crate::file_ui::dialog_width(&d.fields) {
                 ui.set_min_width(w);
                 ui.set_max_width(w);
@@ -700,7 +720,11 @@ pub fn show(app: &mut PhotocraftApp, ctx: &egui::Context) {
                 ui.set_width(crate::color_picker_ui::content_width(ui));
             }
             let label = egui::Label::new(egui::RichText::new(&title).font(crate::theme::semibold(15.0))).selectable(false);
-            let t = if crate::color_picker_ui::owns(&fields) { ui.add_sized(egui::vec2(ui.available_width(), 22.0), label).rect } else { ui.add(label).rect };
+            let t = if crate::color_picker_ui::owns(&fields) {
+                ui.add_sized(egui::vec2(ui.available_width(), 22.0), label).rect
+            } else {
+                ui.add(label).rect
+            };
             // The whole title band drags (#1921): the full width plus a little of the popup's
             // padding around it and the gap above the hairline, but none of the controls below.
             // The close box (#5496) sits at the band's right end and is left out of the drag area:
@@ -715,34 +739,43 @@ pub fn show(app: &mut PhotocraftApp, ctx: &egui::Context) {
             ui.add_space(4.0);
             crate::widgets::hairline(ui);
             ui.add_space(8.0);
-            crate::field_tab::begin(ui.ctx());
-            if let Some(done) = dialog_body(app, ui, &d, &mut fields, id, interactive) {
-                outcome = Some(done);
-            }
-            crate::field_tab::end(ui.ctx(), tab);
-            if let Some(Value::String(key)) = fields.remove(BROWSE_FIELD) {
-                browse_field(app, d.id, &fields, &key);
-            }
-            if d.kind == DialogKind::LayerStyle || crate::guide_layout_ui::owns(&fields) || crate::brush_preset_dialog::owns(&fields) {
-                // These dialogs own their right-side actions and validate Enter themselves.
-            } else if crate::color_picker_ui::owns(&fields) {
-                if interactive && outcome.is_none() && ui.input(|i| i.key_pressed(egui::Key::Enter)) {
-                    outcome = Some(true);
+            // Force top-down for the body+buttons so a horizontal parent layout cannot place the
+            // first form field on the title row (bitmap font face field covered the title).
+            let mut body_ui = |ui: &mut egui::Ui| {
+                crate::field_tab::begin(ui.ctx());
+                if let Some(done) = dialog_body(app, ui, &d, &mut fields, id, interactive) {
+                    outcome = Some(done);
                 }
+                crate::field_tab::end(ui.ctx(), tab);
+                if let Some(Value::String(key)) = fields.remove(BROWSE_FIELD) {
+                    browse_field(app, d.id, &fields, &key);
+                }
+                if d.kind == DialogKind::LayerStyle || crate::guide_layout_ui::owns(&fields) || crate::brush_preset_dialog::owns(&fields) {
+                    // These dialogs own their right-side actions and validate Enter themselves.
+                } else if crate::color_picker_ui::owns(&fields) {
+                    if interactive && outcome.is_none() && ui.input(|i| i.key_pressed(egui::Key::Enter)) {
+                        outcome = Some(true);
+                    }
+                } else {
+                    // The Color Table dialog loads and saves `.act` files, as in Photoshop.
+                    if matches!(d.kind, DialogKind::Command) && crate::color_table_ui::owns(&fields) {
+                        crate::color_table_ui::buttons(app, ui, d.id, &mut fields);
+                    }
+                    ui.add_space(8.0);
+                    // Align::Min, not Center: a centred row fills the height left over from last frame's
+                    // (larger) size, so a dialog whose body gets shorter would never shrink back.
+                    ui.with_layout(egui::Layout::right_to_left(egui::Align::Min), |ui| {
+                        ui.spacing_mut().item_spacing.x = 10.0;
+                        let (done, apply) = button_row(app, ui, &d, &mut fields, id, interactive, web && (web_popup_open || egui::Popup::is_any_open(ui.ctx())));
+                        outcome = done.or(outcome);
+                        apply_requested |= apply;
+                    });
+                }
+            };
+            if bitmap_font {
+                ui.vertical(body_ui);
             } else {
-                // The Color Table dialog loads and saves `.act` files, as in Photoshop.
-                if matches!(d.kind, DialogKind::Command) && crate::color_table_ui::owns(&fields) {
-                    crate::color_table_ui::buttons(app, ui, d.id, &mut fields);
-                }
-                ui.add_space(8.0);
-                // Align::Min, not Center: a centred row fills the height left over from last frame's
-                // (larger) size, so a dialog whose body gets shorter would never shrink back.
-                ui.with_layout(egui::Layout::right_to_left(egui::Align::Min), |ui| {
-                    ui.spacing_mut().item_spacing.x = 10.0;
-                    let (done, apply) = button_row(app, ui, &d, &mut fields, id, interactive, web && (web_popup_open || egui::Popup::is_any_open(ui.ctx())));
-                    outcome = done.or(outcome);
-                    apply_requested |= apply;
-                });
+                body_ui(ui);
             }
             // The frame around the content (Frame::popup's margin and stroke).
             ui.min_rect().expand(ui.spacing().menu_margin.sum().max_elem() + 2.0)
@@ -1269,6 +1302,7 @@ pub mod adjust_preview;
 #[cfg(test)]
 mod arbitrary_ruler_prefill_tests;
 pub(crate) mod bitmap_dialog;
+pub mod bitmap_font_dialog;
 pub mod blur_pins;
 pub mod brush_preset_dialog;
 pub mod caf_ui;
@@ -1354,6 +1388,8 @@ mod preference_resize_tests {
         assert_eq!(resizable_dialog(shortcuts.as_object().unwrap()), None);
         assert_eq!(resizable_dialog(ordinary.as_object().unwrap()), None);
         assert_eq!(resizable_dialog(web.as_object().unwrap()), Some(egui::vec2(960.0, 900.0)));
+        let bm = json!({"__bitmapFont": true}).as_object().unwrap().clone();
+        assert_eq!(resizable_dialog(&bm), Some(crate::bitmap_font_dialog::DIALOG_SIZE));
     }
 
     /// Drags the dialog's resize grip (its frame's bottom-right corner) by `by`.

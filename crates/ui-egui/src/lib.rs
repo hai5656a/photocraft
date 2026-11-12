@@ -128,6 +128,7 @@ pub use dialogs::adjust_dialog;
 pub use dialogs::adjust_editors;
 pub use dialogs::adjust_preview;
 pub(crate) use dialogs::bitmap_dialog;
+pub use dialogs::bitmap_font_dialog;
 pub use dialogs::blur_pins;
 pub use dialogs::brush_preset_dialog;
 pub use dialogs::caf_ui;
@@ -302,6 +303,7 @@ pub use tools::frame_tool;
 pub use tools::gradient_ui;
 pub use tools::lasso_ui;
 pub use tools::magnetic_lasso_ui;
+pub use tools::layer_gap_ui;
 pub use tools::move_box;
 pub use tools::move_distance;
 pub use tools::move_hover;
@@ -409,6 +411,8 @@ pub struct PhotocraftApp {
     pub(crate) move_hover: Option<move_hover::Hover>,
     /// Smart Guides distances shown with ⌘ held over the canvas: the last answer (`move_distance`).
     pub(crate) move_distance: Option<move_distance::Cache>,
+    /// Mid-gap drag while spacing a multi-selection (`layer_gap_ui`).
+    pub(crate) layer_gap_drag: Option<layer_gap_ui::GapDrag>,
     /// Object Selection › Object Finder: the hover preview (`object_finder`).
     pub(crate) object_finder: Option<object_finder::Finder>,
     /// A blend mode hovered in the Layers panel, shown live (`blend_preview`).

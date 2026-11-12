@@ -379,6 +379,58 @@ fn layer_style_is_laid_out_like_photoshops() {
     assert!(ok.top() < cancel.top() && cancel.top() < new_style.top() && new_style.top() < preview.top(), "top to bottom");
 }
 
+/// Bitmap Font export must not widen every frame (content that asks for more than the Resize box
+/// used to push it out to both sides while centred), and it keeps a resize grip.
+#[test]
+fn bitmap_font_dialog_width_stays_put_across_frames() {
+    let mut app = PhotocraftApp::new(photocraft_engine::Session::new(), crate::Services::default());
+    app.run("file.new", json!({"width": 200, "height": 100})).unwrap();
+    app.run("type.create", json!({"text": "12.AB", "size": 24, "x": 10, "y": 40})).unwrap();
+    crate::bitmap_font_dialog::open(&mut app, "/tmp".into(), "Face".into(), "12.AB".into());
+    let mut h = egui_kittest::Harness::builder().with_size(egui::vec2(1400.0, 900.0)).build_ui_state(
+        |ui, app| {
+            if ui.ctx().fonts(|f| f.families().contains(&egui::FontFamily::Name("semibold".into()))) {
+                show(app, ui.ctx());
+            }
+        },
+        app,
+    );
+    PhotocraftApp::setup_context(&h.ctx, crate::theme::ThemeKind::ALL[0]);
+    h.run_steps(4);
+    let opened = frame(&h);
+    // `frame()` is the content rect expanded by the popup margin (hit-test chrome), not the Resize box.
+    assert!(
+        opened.width() <= crate::bitmap_font_dialog::DIALOG_SIZE.x + 120.0,
+        "opened wider than default+chrome {:?}",
+        opened.size()
+    );
+    assert!(
+        opened.height() <= crate::bitmap_font_dialog::DIALOG_SIZE.y + 120.0,
+        "opened taller than default+chrome {:?}",
+        opened.size()
+    );
+    let dialog = h.state().ui.dialogs[0].id;
+    let grip = egui::Id::unique(("dialog", dialog)).with("resize").with("__resize_corner");
+    assert!(h.ctx.read_response(grip).is_some(), "resize grip present");
+    {
+        use egui_kittest::kittest::Queryable;
+        let title = h.get_by_label("Export Bitmap Font").rect();
+        let face = h.get_by_role_and_label(egui::accesskit::Role::TextInput, "Face").rect();
+        let dir = h.get_by_role_and_label(egui::accesskit::Role::TextInput, "Dir").rect();
+        let preview = h.get_by_label("Preview").rect();
+        assert!(
+            face.top() >= title.bottom() - 0.5,
+            "face field overlaps title: title={title:?} face={face:?} dir={dir:?} preview={preview:?} frame={opened:?}"
+        );
+        assert!(dir.top() > face.bottom() - 1.0, "dir should be below face: face={face:?} dir={dir:?}");
+        assert!(preview.top() > title.bottom(), "preview should be below title: title={title:?} preview={preview:?}");
+    }
+    h.run_steps(20);
+    let later = frame(&h);
+    assert_eq!(later.size(), opened.size(), "size drifted {opened:?} → {later:?}");
+    assert!((later.min.x - opened.min.x).abs() < 1.0, "left edge drifted {opened:?} → {later:?}");
+}
+
 /// Layer Style keeps one size on every page, as Photoshop's does (it used to grow and shrink
 /// with each page), and has no resize grip: Photoshop's isn't resizable either.
 #[test]

@@ -503,6 +503,48 @@ pub(super) fn front(app: &mut PhotocraftApp, ctx: &egui::Context, id: &str, para
                 dialog(app, json!({"dir": dir, "naming": "{name}", "format": "png"}), json!({"format": ["png", "jpg", "psd", "tiff", "webp", "bmp"]}))
             }
         }
+        "file.export.bitmapFont" => {
+            let (face, text) = app.session.active().map_or((None, None), |st| {
+                let id = match st.active_layer {
+                    Some(id) => id,
+                    None => return (None, None),
+                };
+                let layer = match st.doc.layer(id) {
+                    Some(l) => l,
+                    None => return (None, None),
+                };
+                let face = Some(layer.name.clone());
+                let text = match &layer.content {
+                    photocraft_doc::LayerContent::Text(t) => Some(t.text.clone()),
+                    photocraft_doc::LayerContent::Group(_) if layer.is_all_text_group() => {
+                        let mut s = String::new();
+                        fn walk(layers: &[photocraft_doc::Layer], out: &mut String) {
+                            for l in layers {
+                                match &l.content {
+                                    photocraft_doc::LayerContent::Text(t) => out.push_str(&t.text),
+                                    photocraft_doc::LayerContent::Group(g) => walk(&g.children, out),
+                                    _ => {}
+                                }
+                            }
+                        }
+                        if let Some(kids) = layer.children() {
+                            walk(kids, &mut s);
+                        }
+                        Some(s)
+                    }
+                    _ => None,
+                };
+                (face, text)
+            });
+            Some(Ok(json!({
+                "dialog": crate::bitmap_font_dialog::open(
+                    app,
+                    dir,
+                    face.unwrap_or_else(|| "BitmapFont".into()),
+                    text.unwrap_or_default(),
+                )
+            })))
+        }
         "layer.new.artboard" => {
             let (w, h, _) = doc?;
             let presets: Vec<&str> = std::iter::once("").chain(photocraft_engine::artboard_cmds::PRESETS.iter().map(|p| p.0)).collect();

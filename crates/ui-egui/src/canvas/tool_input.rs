@@ -145,6 +145,10 @@ fn filter_event_before_tool(
     if crate::move_box::pointer(app, raw) {
         return None;
     }
+    // Multi-selection gap handles before snapping arms a Move drag on the same press.
+    if crate::layer_gap_ui::pointer(app, raw, mods) {
+        return None;
+    }
     // A press that doesn't drag the floating piece drops it first: off it, with ⇧ / ⌥ to draw, or a
     // plain selection-tool press on it, which moves the outline only (#11368). The Move tool (⌘
     // with a painting tool too, `event_tool`) drags it from anywhere.

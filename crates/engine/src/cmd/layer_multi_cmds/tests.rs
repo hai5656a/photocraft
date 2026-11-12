@@ -621,6 +621,33 @@ fn toggle_and_range_selection() {
     assert!(!s.is_enabled("layer.align.topEdges"));
 }
 
+/// ⇧-range through an expanded group must not leave the group and its children both selected
+/// (that made the Layers panel light several rows while the canvas drew one top-level box).
+#[test]
+fn range_across_expanded_group_collapses_to_the_group() {
+    let mut s = session(8);
+    let above = rect_layer(&mut s, Rect::new(0, 0, 4, 4));
+    let leaf = rect_layer(&mut s, Rect::new(10, 10, 20, 20));
+    s.execute("layer.select", json!({"layer": leaf.0})).unwrap();
+    let group = LayerId(s.execute("layer.groupLayers", json!({"name": "G"})).unwrap()["layer"].as_u64().unwrap());
+    // Keep the group expanded so range_order walks into its children.
+    {
+        let doc = std::sync::Arc::make_mut(&mut s.active_mut().unwrap().doc);
+        if let LayerContent::Group(g) = &mut doc.layer_mut(group).unwrap().content {
+            g.expanded = true;
+        }
+    }
+    let below = rect_layer(&mut s, Rect::new(40, 40, 50, 50));
+    // Panel order (top→bottom visual): below, G (leaf), above — rev walk of stack.
+    s.execute("layer.select", json!({"layer": above.0})).unwrap();
+    s.execute("layer.select", json!({"layer": below.0, "mode": "range"})).unwrap();
+    let got = sel(&s);
+    assert!(got.contains(&above), "{got:?}");
+    assert!(got.contains(&group), "{got:?}");
+    assert!(got.contains(&below), "{got:?}");
+    assert!(!got.contains(&leaf), "child dropped while group selected: {got:?}");
+}
+
 #[test]
 fn find_layers_by_name() {
     let mut s = session(8);

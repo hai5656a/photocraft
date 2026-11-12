@@ -20,14 +20,13 @@ mod selection;
 mod structure;
 
 use align::{align, distribute};
+pub(crate) use align::{bounded_selection, dedup_moves};
 pub(crate) use damage::grow_hint;
 #[cfg(any(test, debug_assertions))]
 pub(crate) use damage::{hint_misses, small_change_pct};
 pub use damage::{layer_bounds, same_pixels, selection_only_change, step_damage};
 use moves::link_groups;
-pub(crate) use moves::shift_surface;
-#[cfg(test)]
-pub(crate) use moves::with_links;
+pub(crate) use moves::{move_layers, shift_surface, with_links};
 pub use moves::{move_targets, move_to, moved, moved_target, moves_mask_alone, preview_move, translate};
 use selection::{doc_state, find_layers, select_all_layers, select_linked};
 pub(crate) use selection::{mask_targets, recorded_step, reselect, targets, top_level};

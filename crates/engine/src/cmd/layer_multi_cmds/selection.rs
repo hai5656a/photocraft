@@ -47,6 +47,28 @@ pub(crate) fn top_level(doc: &Document, ids: &[LayerId]) -> Vec<LayerId> {
     paths.iter().filter(|(p, _)| !paths.iter().any(|(q, _)| q.len() < p.len() && p.starts_with(q))).map(|(_, id)| *id).collect()
 }
 
+/// Whether `anc` is a strict ancestor of `desc` in the layer tree.
+fn is_strict_ancestor(doc: &Document, anc: LayerId, desc: LayerId) -> bool {
+    match (doc.path_of(anc), doc.path_of(desc)) {
+        (Some(a), Some(d)) => d.len() > a.len() && d.starts_with(&a),
+        _ => false,
+    }
+}
+
+/// Drop descendants when an ancestor is also selected, and pick an active id that remains.
+/// Keeps the Layers panel and canvas frames on the same set (a selected group is one target).
+fn collapse_nested(doc: &Document, ids: &[LayerId], prefer: LayerId) -> (Vec<LayerId>, LayerId) {
+    let sel = top_level(doc, ids);
+    if sel.is_empty() {
+        return (vec![prefer], prefer);
+    }
+    if sel.contains(&prefer) {
+        return (sel, prefer);
+    }
+    let active = sel.iter().copied().find(|&a| is_strict_ancestor(doc, a, prefer)).or_else(|| sel.last().copied()).unwrap_or(prefer);
+    (sel, active)
+}
+
 /// Replace the layer selection without a history step (like [`Session::select_layer`]).
 pub fn set_selection(s: &mut Session, ids: Vec<LayerId>, active: Option<LayerId>, anchor: Option<LayerId>) -> Result<()> {
     let before = s.active_layer_stamp();
@@ -280,7 +302,11 @@ pub fn select(s: &mut Session, p: &Value) -> Result<Value> {
             if !sel.contains(&id) {
                 sel.push(id);
             }
-            set_selection(s, sel, Some(id), Some(id))?;
+            let (sel, active) = {
+                let st = s.active().ok_or(EngineError::NoDocument)?;
+                collapse_nested(&st.doc, &sel, id)
+            };
+            set_selection(s, sel, Some(active), Some(active))?;
         }
         "toggle" => {
             if sel.contains(&id) {
@@ -293,7 +319,11 @@ pub fn select(s: &mut Session, p: &Value) -> Result<Value> {
                 set_selection(s, sel, active, active)?;
             } else {
                 sel.push(id);
-                set_selection(s, sel, Some(id), Some(id))?;
+                let (sel, active) = {
+                    let st = s.active().ok_or(EngineError::NoDocument)?;
+                    collapse_nested(&st.doc, &sel, id)
+                };
+                set_selection(s, sel, Some(active), Some(active))?;
             }
         }
         // Toggle's removing half: a layer that isn't selected stays unselected (Photoshop's
@@ -317,7 +347,13 @@ pub fn select(s: &mut Session, p: &Value) -> Result<Value> {
             }
             let (a, b) = (order.iter().position(|x| *x == anchor).unwrap_or(0), order.iter().position(|x| *x == id).unwrap_or(0));
             let range = order[a.min(b)..=a.max(b)].to_vec();
-            set_selection(s, range, Some(id), Some(anchor))?;
+            // Expanded groups put the folder and its children in the range; keep the group only so
+            // the panel highlight matches the canvas frames (one box per top-level target).
+            let (range, active) = {
+                let st = s.active().ok_or(EngineError::NoDocument)?;
+                collapse_nested(&st.doc, &range, id)
+            };
+            set_selection(s, range, Some(active), Some(anchor))?;
         }
         other => return Err(bad("layer.select", format!("unknown mode `{other}`"))),
     }

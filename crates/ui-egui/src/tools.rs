@@ -25,6 +25,7 @@ pub mod frame_tool;
 pub mod gradient_ui;
 pub mod lasso_ui;
 pub mod magnetic_lasso_ui;
+pub mod layer_gap_ui;
 pub mod move_box;
 pub mod move_distance;
 pub mod move_hover;

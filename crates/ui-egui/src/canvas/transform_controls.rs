@@ -57,6 +57,10 @@ impl PhotocraftApp {
     }
 }
 
+pub(super) fn transform_controls_several(app: &PhotocraftApp) -> bool {
+    transform_controls_layers(app).len() > 1
+}
+
 /// Move tool › Show Transform Controls: the boxes Free Transform would open on the selected
 /// layers, joined into one.
 pub(super) fn transform_controls_rect(app: &PhotocraftApp, xf: &ViewXform) -> Option<Rect> {
@@ -162,10 +166,10 @@ pub(super) fn begin_transform_controls_at(app: &mut PhotocraftApp, ctx: &egui::C
     }
 }
 
-/// Move tool › Show Transform Controls: the selected layers' bounding box, with its eight handles,
-/// and the outline of every selected shape layer, as in Photoshop.
+/// Move tool › Show Transform Controls: the selected layers' bounding box, with its eight handles
+/// for one layer, and the outline of every selected shape layer, as in Photoshop. Per-layer frames
+/// for a multi-selection (and dragging the gap between them) are drawn by `layer_gap_ui`.
 pub(super) fn draw_transform_controls(app: &mut PhotocraftApp, painter: &egui::Painter, xf: &ViewXform) {
-    let Some(r) = transform_controls_rect(app, xf) else { return };
     let accent = crate::theme::Tokens::get(painter.ctx()).accent;
     let to_scr = |q: [f64; 2]| xf.to_screen(q[0] as f32, q[1] as f32);
     for l in transform_controls_layers(app) {
@@ -173,6 +177,16 @@ pub(super) fn draw_transform_controls(app: &mut PhotocraftApp, painter: &egui::P
             crate::vector_ui::draw_outline(painter, &sh.path, &to_scr, accent);
         }
     }
+    // Several selected layers with content: `layer_gap_ui` draws one box per selected row (same
+    // set as the Layers panel). A second union rectangle here looked like a different selection.
+    if transform_controls_several(app) {
+        let Some(st) = app.session.active() else { return };
+        let frames = photocraft_engine::layer_gap_cmds::selection_frames(&st.doc, &st.selected_layers());
+        if frames.len() >= 2 {
+            return;
+        }
+    }
+    let Some(r) = transform_controls_rect(app, xf) else { return };
     painter.rect_stroke(r, 0.0, Stroke::new(1.0, accent), egui::StrokeKind::Middle);
     for p in [r.left_top(), r.center_top(), r.right_top(), r.right_center(), r.right_bottom(), r.center_bottom(), r.left_bottom(), r.left_center()] {
         let h = Rect::from_center_size(p, vec2(7.0, 7.0));

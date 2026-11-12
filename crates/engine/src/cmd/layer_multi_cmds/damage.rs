@@ -802,10 +802,16 @@ pub(crate) fn small_change_pct(a: &Document, b: &Document) -> Option<u64> {
 
 /// Content bounds of a layer's pixels as stored (type and shape layers: their cached render), or
 /// the union of a group's children. Fill and adjustment layers have none. Cheap: Layers list,
-/// artboards, copy and slices call it for every layer.
+/// artboards, copy, slices and Spacing (`layer.gap.set`) call it for every layer.
 pub fn layer_bounds(l: &Layer) -> Option<Rect> {
     let r = match &l.content {
         LayerContent::Group(g) => g.children.iter().filter_map(layer_bounds).fold(Rect::EMPTY, |a, b| a.union(&b)),
+        LayerContent::Shape(sh) => l
+            .surface()
+            .map(|s| s.content_bounds())
+            .filter(|r| !r.is_empty())
+            .or_else(|| photocraft_compose::hard_shape_bounds(sh))
+            .unwrap_or(Rect::EMPTY),
         _ => l.surface().map(|s| s.content_bounds()).unwrap_or(Rect::EMPTY),
     };
     (!r.is_empty()).then_some(r)
